@@ -217,6 +217,11 @@ body{font-family:'IBM Plex Sans Arabic',sans-serif;background:var(--bg);color:va
 .search-input{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:.6rem .9rem;font-size:13px;font-family:inherit;color:var(--t1);outline:none}
 .search-input:focus{border-color:var(--red)}
 .search-input::placeholder{color:var(--t3)}
+.toast{position:fixed;bottom:85px;left:50%;transform:translateX(-50%);background:var(--black);color:#fff;padding:.75rem 1.25rem;border-radius:10px;font-size:13px;font-weight:500;z-index:500;opacity:0;transition:opacity .3s;pointer-events:none;white-space:nowrap;max-width:90vw;text-align:center}
+.toast.show{opacity:1}
+.toast.success{background:var(--green)}
+.toast.error{background:var(--red)}
+.fab-label{position:fixed;left:4.5rem;bottom:88px;background:var(--black);color:#fff;padding:.4rem .75rem;border-radius:8px;font-size:12px;font-weight:500;z-index:149;white-space:nowrap;pointer-events:none;display:none}
 .day-table{width:100%;border-collapse:collapse;font-size:12px}
 .day-table th{padding:9px 10px;text-align:right;color:var(--t3);font-weight:500;border-bottom:1px solid var(--border);white-space:nowrap;background:var(--surface2)}
 .day-table td{padding:9px 10px;border-bottom:1px solid var(--border);color:var(--t2)}
@@ -281,9 +286,10 @@ body{font-family:'IBM Plex Sans Arabic',sans-serif;background:var(--bg);color:va
   <div class="page" id="page-dashboard">
     <div class="month-bar">
       <select class="month-select" id="dash-month" onchange="loadDashboard()">
-        <option value="2026-09">سبتمبر 2026</option>
-        <option value="2026-10" selected>أكتوبر 2026</option>
+        <option value="2026-09" selected>سبتمبر 2026</option>
+        <option value="2026-10">أكتوبر 2026</option>
         <option value="2026-11">نوفمبر 2026</option>
+        <option value="2026-12">ديسمبر 2026</option>
       </select>
     </div>
     <div class="kpi-grid" id="dash-kpis">
@@ -356,9 +362,10 @@ body{font-family:'IBM Plex Sans Arabic',sans-serif;background:var(--bg);color:va
   <div class="page" id="page-expenses-owner">
     <div class="month-bar">
       <select class="month-select" id="exp-month" onchange="loadExpenses()">
-        <option value="2026-09">سبتمبر 2026</option>
-        <option value="2026-10" selected>أكتوبر 2026</option>
+        <option value="2026-09" selected>سبتمبر 2026</option>
+        <option value="2026-10">أكتوبر 2026</option>
         <option value="2026-11">نوفمبر 2026</option>
+        <option value="2026-12">ديسمبر 2026</option>
       </select>
     </div>
     <div class="kpi-grid">
@@ -406,6 +413,14 @@ body{font-family:'IBM Plex Sans Arabic',sans-serif;background:var(--bg);color:va
 
   <!-- ADMIN: EXPENSES -->
   <div class="page" id="page-admin-expenses">
+    <div class="month-bar">
+      <select class="month-select" id="admin-exp-month" onchange="loadMyExpenses()">
+        <option value="2026-09" selected>سبتمبر 2026</option>
+        <option value="2026-10">أكتوبر 2026</option>
+        <option value="2026-11">نوفمبر 2026</option>
+        <option value="2026-12">ديسمبر 2026</option>
+      </select>
+    </div>
     <div class="summary-strip">
       <div class="strip-item"><div class="strip-label">معلق</div><div class="strip-val r" id="admin-pending-count">...</div></div>
       <div class="strip-item"><div class="strip-label">معتمد</div><div class="strip-val g" id="admin-approved-count">...</div></div>
@@ -431,6 +446,14 @@ body{font-family:'IBM Plex Sans Arabic',sans-serif;background:var(--bg);color:va
 
   <!-- FIELDS: EXPENSES -->
   <div class="page" id="page-fields-expenses">
+    <div class="month-bar">
+      <select class="month-select" id="fields-exp-month" onchange="loadMyExpenses()">
+        <option value="2026-09" selected>سبتمبر 2026</option>
+        <option value="2026-10">أكتوبر 2026</option>
+        <option value="2026-11">نوفمبر 2026</option>
+        <option value="2026-12">ديسمبر 2026</option>
+      </select>
+    </div>
     <div class="summary-strip">
       <div class="strip-item"><div class="strip-label">معلق</div><div class="strip-val r" id="fields-pending-count">...</div></div>
       <div class="strip-item"><div class="strip-label">معتمد</div><div class="strip-val g" id="fields-approved-count">...</div></div>
@@ -686,6 +709,8 @@ body{font-family:'IBM Plex Sans Arabic',sans-serif;background:var(--bg);color:va
     <div class="nav-item" onclick="fieldsTab('fields-expenses',this)"><span class="nav-icon">💸</span><span class="nav-label">المصاريف</span></div>
   </nav>
   <button class="fab" id="fab-btn" style="display:none" onclick="fabAction()">＋</button>
+  <div class="fab-label" id="fab-label"></div>
+  <div class="toast" id="toast"></div>
 </div>
 
 <script>
@@ -748,13 +773,23 @@ function switchInner(showId,hideId,btn){document.getElementById(showId).style.di
 // ============ FAB ============
 function setupFab(role,page){
   const fab=document.getElementById('fab-btn');
-  const show={admin:['admin-subs','admin-bus','admin-inventory','admin-expenses'],fields:['fields-cal','fields-expenses'],owner:[]};
-  fab.style.display=(show[role]||[]).includes(page)?'flex':'none';
+  if(role==='owner'){fab.style.display='none';return;}
+  fab.style.display='flex';
+  const icons={'admin-subs':'👤','admin-bus':'🚌','admin-inventory':'🛍️','admin-expenses':'💸','fields-cal':'📅','fields-expenses':'💸'};
+  fab.textContent=icons[page]||'＋';
 }
 function fabAction(){
   const p=document.querySelector('.page.active');if(!p)return;
-  const map={'admin-subs':'add-sub-modal','admin-bus':'add-sub-modal','admin-inventory':'add-sale-modal','admin-expenses':'add-expense-modal','fields-cal':'add-booking-modal','fields-expenses':'add-expense-modal'};
-  const pid=p.id.replace('page-','');if(map[pid])openModal(map[pid]);
+  const map={
+    'admin-subs':'add-sub-modal',
+    'admin-bus':'add-sub-modal',
+    'admin-inventory':'add-sale-modal',
+    'admin-expenses':'add-expense-modal',
+    'fields-cal':'add-booking-modal',
+    'fields-expenses':'add-expense-modal'
+  };
+  const pid=p.id.replace('page-','');
+  if(map[pid])openModal(map[pid]);
 }
 
 // ============ MODALS ============
@@ -774,6 +809,13 @@ function updateBkTotal(){const base=selectedPitch==='small'?250:300;document.get
 function selectCat(btn,cat){selectedCat=cat;document.querySelectorAll('.cat-btn').forEach(b=>b.classList.remove('selected'));btn.classList.add('selected');}
 function fmt(n){return Number(n).toLocaleString('ar-SA');}
 function setEl(id,val){const el=document.getElementById(id);if(el)el.textContent=val;}
+function showToast(msg,type='success'){
+  const t=document.getElementById('toast');
+  if(!t)return;
+  t.textContent=msg;
+  t.className='toast '+type+' show';
+  setTimeout(()=>t.className='toast',2500);
+}
 
 // ============ SUPABASE CRUD ============
 async function loadInitialData(){
@@ -854,8 +896,10 @@ async function loadExpenses(){
 
 async function loadMyExpenses(){
   const by=ROLE_META[currentRole]?.label;
+  const monthSelId=currentRole==='admin'?'admin-exp-month':'fields-exp-month';
+  const month=document.getElementById(monthSelId)?.value||'2026-09';
   const{data:pending}=await sb.from('expenses').select('*').eq('status','pending').eq('submitted_by',by).order('created_at',{ascending:false});
-  const{data:approved}=await sb.from('expenses').select('*').eq('status','approved').eq('submitted_by',by).order('approved_at',{ascending:false}).limit(15);
+  const{data:approved}=await sb.from('expenses').select('*').eq('status','approved').gte('date',month+'-01').lte('date',month+'-31').order('date',{ascending:false});
   const pendingCount=(pending||[]).length;
   const approvedCount=(approved||[]).length;
   if(currentRole==='admin'){
@@ -881,16 +925,22 @@ async function loadSales(){
 }
 
 async function loadDashboard(){
-  const month=document.getElementById('dash-month')?.value||today.slice(0,7);
-  const{data:bks}=await sb.from('bookings').select('amount').gte('date',month+'-01').lte('date',month+'-31');
-  const{data:sls}=await sb.from('sales').select('total').gte('created_at',month+'-01').lte('created_at',month+'-31 23:59:59');
-  const{data:exps}=await sb.from('expenses').select('amount').eq('status','approved').gte('date',month+'-01').lte('date',month+'-31');
-  const rev=(bks||[]).reduce((a,b)=>a+Number(b.amount),0)+(sls||[]).reduce((a,s)=>a+Number(s.total),0);
+  const month=document.getElementById('dash-month')?.value||'2026-09';
+  const startDate=month+'-01';
+  const endDate=month+'-31';
+  const[{data:bks},{data:sls},{data:exps}]=await Promise.all([
+    sb.from('bookings').select('amount').gte('date',startDate).lte('date',endDate),
+    sb.from('sales').select('total,created_at'),
+    sb.from('expenses').select('amount').eq('status','approved').gte('date',startDate).lte('date',endDate)
+  ]);
+  const filteredSales=(sls||[]).filter(s=>s.created_at&&s.created_at.slice(0,7)===month);
+  const rev=(bks||[]).reduce((a,b)=>a+Number(b.amount),0)+filteredSales.reduce((a,s)=>a+Number(s.total),0);
   const exp=(exps||[]).reduce((a,e)=>a+Number(e.amount),0);
   const profit=rev-exp;
+  const profitEl=document.getElementById('dash-profit');
+  if(profitEl){profitEl.textContent=fmt(Math.abs(profit))+' ر';profitEl.className='kpi-val '+(profit>=0?'g':'r');}
   setEl('dash-rev',fmt(rev)+' ر');
   setEl('dash-exp',fmt(exp)+' ر');
-  setEl('dash-profit',fmt(profit)+' ر');
   setEl('dash-profit-sub','إيرادات '+fmt(rev)+' · مصاريف '+fmt(exp));
   await loadApprovals();
 }
@@ -905,9 +955,10 @@ async function addSubscriber(){
   btn.disabled=true;btn.textContent='جاري الحفظ...';
   const{error}=await sb.from('subscribers').insert({name,type:document.getElementById('sub-type').value,package:selectedPkg*count,payment_method:payMethods.sub,has_receipt:payMethods.sub!=='نقدي',created_by:ROLE_META[currentRole]?.label});
   btn.disabled=false;btn.textContent='إضافة المشترك';
-  if(error){alert('خطأ: '+error.message);return;}
+  if(error){showToast('خطأ في الحفظ','error');return;}
   closeModal('add-sub-modal');
   document.getElementById('sub-name').value='';
+  showToast('✅ تم إضافة المشترك بنجاح');
   await loadSubs();
 }
 
@@ -920,9 +971,10 @@ async function addBooking(){
   btn.disabled=true;btn.textContent='جاري الحفظ...';
   const{error}=await sb.from('bookings').insert({pitch:selectedPitch,booker_name:name,date:document.getElementById('bk-date').value,time:document.getElementById('bk-time').value,water:waterOn,amount,payment_method:payMethods.bk,has_receipt:payMethods.bk!=='نقدي',created_by:ROLE_META[currentRole]?.label});
   btn.disabled=false;btn.textContent='تسجيل الحجز';
-  if(error){alert('خطأ: '+error.message);return;}
+  if(error){showToast('خطأ في الحفظ','error');return;}
   closeModal('add-booking-modal');
   document.getElementById('bk-name').value='';
+  showToast('✅ تم تسجيل الحجز بنجاح');
   await loadBookings();
   renderCalendar(currentRole==='fields'?'cal-fields':'cal-owner');
 }
@@ -935,10 +987,11 @@ async function addExpense(){
   btn.disabled=true;btn.textContent='جاري الإرسال...';
   const{error}=await sb.from('expenses').insert({category:selectedCat,description:desc,amount,date:document.getElementById('exp-date').value,payment_method:payMethods.exp,has_receipt:payMethods.exp!=='نقدي',status:'pending',submitted_by:ROLE_META[currentRole]?.label});
   btn.disabled=false;btn.textContent='إرسال للموافقة';
-  if(error){alert('خطأ: '+error.message);return;}
+  if(error){showToast('خطأ في الحفظ','error');return;}
   closeModal('add-expense-modal');
   document.getElementById('exp-desc').value='';document.getElementById('exp-amount').value='';
   selectedCat='';document.querySelectorAll('.cat-btn').forEach(b=>b.classList.remove('selected'));
+  showToast('✅ تم إرسال المصروف للموافقة');
   await loadMyExpenses();
   if(currentRole==='owner')await loadApprovals();
 }
@@ -951,18 +1004,21 @@ async function addSale(){
   btn.disabled=true;btn.textContent='جاري الحفظ...';
   const{error}=await sb.from('sales').insert({item,qty,price,total:qty*price,payment_method:payMethods.sale,has_receipt:payMethods.sale!=='نقدي',created_by:ROLE_META[currentRole]?.label});
   btn.disabled=false;btn.textContent='تسجيل البيع';
-  if(error){alert('خطأ: '+error.message);return;}
+  if(error){showToast('خطأ في الحفظ','error');return;}
   closeModal('add-sale-modal');
+  showToast('✅ تم تسجيل البيع بنجاح');
   await loadSales();
 }
 
 async function approveExpense(id){
   await sb.from('expenses').update({status:'approved',approved_by:'المالك',approved_at:new Date().toISOString()}).eq('id',id);
+  showToast('✅ تمت الموافقة على المصروف');
   await loadApprovals();
   await loadDashboard();
 }
 async function rejectExpense(id){
   await sb.from('expenses').update({status:'rejected',approved_by:'المالك',approved_at:new Date().toISOString()}).eq('id',id);
+  showToast('تم رفض المصروف','error');
   await loadApprovals();
 }
 
