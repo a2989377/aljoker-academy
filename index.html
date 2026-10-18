@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>أكاديمية الجوكر</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
@@ -53,6 +53,7 @@ body{font-family:'IBM Plex Sans Arabic',sans-serif;background:var(--bg);color:va
 .sec{font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.07em;margin:.9rem 0 .5rem}
 .sec:first-child{margin-top:0}
 .kpi-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:.75rem}
+@media(max-width:380px){.kpi-grid{grid-template-columns:1fr}.kpi.full{grid-column:1}}
 .kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem;box-shadow:var(--sh)}
 .kpi.full{grid-column:1/-1}
 .kpi.accent{background:var(--black);border-color:var(--black)}
@@ -141,8 +142,8 @@ body{font-family:'IBM Plex Sans Arabic',sans-serif;background:var(--bg);color:va
 .pitch-name{font-size:14px;font-weight:700;color:var(--t1);margin-bottom:.25rem}
 .pitch-price{font-size:20px;font-weight:700;color:var(--red)}
 .pitch-sub{font-size:11px;color:var(--t3);margin-top:.25rem}
-.fab{position:fixed;left:1rem;bottom:80px;width:48px;height:48px;background:var(--red);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:22px;color:#fff;cursor:pointer;box-shadow:0 4px 12px rgba(204,31,31,.4);z-index:150;border:none}
-.fab:active{transform:scale(.95)}
+.fab{position:fixed;right:1rem;bottom:80px;width:54px;height:54px;background:var(--red);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:26px;color:#fff;cursor:pointer;box-shadow:0 4px 16px rgba(204,31,31,.5);z-index:150;border:none;font-family:inherit}
+.fab:active{transform:scale(.93)}
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:300;display:flex;align-items:flex-end;justify-content:center}
 .modal{background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:560px;padding:1.5rem;max-height:88vh;overflow-y:auto}
 .modal-handle{width:36px;height:4px;background:var(--border2);border-radius:2px;margin:0 auto 1.25rem}
@@ -221,7 +222,7 @@ body{font-family:'IBM Plex Sans Arabic',sans-serif;background:var(--bg);color:va
 .toast.show{opacity:1}
 .toast.success{background:var(--green)}
 .toast.error{background:var(--red)}
-.fab-label{position:fixed;left:4.5rem;bottom:88px;background:var(--black);color:#fff;padding:.4rem .75rem;border-radius:8px;font-size:12px;font-weight:500;z-index:149;white-space:nowrap;pointer-events:none;display:none}
+.fab-label{position:fixed;right:4.5rem;bottom:92px;background:var(--black);color:#fff;padding:.4rem .75rem;border-radius:8px;font-size:12px;font-weight:500;z-index:149;white-space:nowrap;pointer-events:none;display:none}
 .day-table{width:100%;border-collapse:collapse;font-size:12px}
 .day-table th{padding:9px 10px;text-align:right;color:var(--t3);font-weight:500;border-bottom:1px solid var(--border);white-space:nowrap;background:var(--surface2)}
 .day-table td{padding:9px 10px;border-bottom:1px solid var(--border);color:var(--t2)}
@@ -866,7 +867,8 @@ async function loadFieldsStats(){
   const bigRev=allBookings.filter(b=>b.pitch==='big').reduce((a,b)=>a+Number(b.amount),0);
   const todayBks=allBookings.filter(b=>b.date===today);
   const todayRev=todayBks.reduce((a,b)=>a+Number(b.amount),0);
-  const monthBks=allBookings.filter(b=>b.date&&b.date.startsWith(today.slice(0,7)));
+  const currentMonth=today.slice(0,7);
+  const monthBks=allBookings.filter(b=>b.date&&b.date.startsWith(currentMonth));
   const monthRev=monthBks.reduce((a,b)=>a+Number(b.amount),0);
   setEl('pitch-small-rev',fmt(smallRev)+' ر');
   setEl('pitch-big-rev',fmt(bigRev)+' ر');
@@ -889,8 +891,8 @@ async function loadApprovals(){
 }
 
 async function loadExpenses(){
-  const month=document.getElementById('exp-month')?.value||today.slice(0,7);
-  const{data}=await sb.from('expenses').select('*').eq('status','approved').gte('date',month+'-01').lte('date',month+'-31').order('date',{ascending:false});
+  const month=document.getElementById('exp-month')?.value||'2026-09';
+  const{data}=await sb.from('expenses').select('*').eq('status','approved').gte('date',month+'-01').lte('date',monthEnd(month)).order('date',{ascending:false});
   renderExpensesOwner(data||[]);
 }
 
@@ -899,7 +901,7 @@ async function loadMyExpenses(){
   const monthSelId=currentRole==='admin'?'admin-exp-month':'fields-exp-month';
   const month=document.getElementById(monthSelId)?.value||'2026-09';
   const{data:pending}=await sb.from('expenses').select('*').eq('status','pending').eq('submitted_by',by).order('created_at',{ascending:false});
-  const{data:approved}=await sb.from('expenses').select('*').eq('status','approved').gte('date',month+'-01').lte('date',month+'-31').order('date',{ascending:false});
+  const{data:approved}=await sb.from('expenses').select('*').eq('status','approved').gte('date',month+'-01').lte('date',monthEnd(month)).order('date',{ascending:false});
   const pendingCount=(pending||[]).length;
   const approvedCount=(approved||[]).length;
   if(currentRole==='admin'){
@@ -924,21 +926,24 @@ async function loadSales(){
   renderSalesLog(data||[]);
 }
 
+function monthEnd(month){
+  const[y,m]=month.split('-').map(Number);
+  return new Date(y,m,0).toISOString().slice(0,10);
+}
 async function loadDashboard(){
   const month=document.getElementById('dash-month')?.value||'2026-09';
-  const startDate=month+'-01';
-  const endDate=month+'-31';
-  const[{data:bks},{data:sls},{data:exps}]=await Promise.all([
-    sb.from('bookings').select('amount').gte('date',startDate).lte('date',endDate),
-    sb.from('sales').select('total,created_at'),
-    sb.from('expenses').select('amount').eq('status','approved').gte('date',startDate).lte('date',endDate)
+  const start=month+'-01';
+  const end=monthEnd(month);
+  const[r1,r2,r3]=await Promise.all([
+    sb.from('bookings').select('amount').gte('date',start).lte('date',end),
+    sb.from('sales').select('total,created_at').gte('created_at',start+'T00:00:00').lte('created_at',end+'T23:59:59'),
+    sb.from('expenses').select('amount').eq('status','approved').gte('date',start).lte('date',end)
   ]);
-  const filteredSales=(sls||[]).filter(s=>s.created_at&&s.created_at.slice(0,7)===month);
-  const rev=(bks||[]).reduce((a,b)=>a+Number(b.amount),0)+filteredSales.reduce((a,s)=>a+Number(s.total),0);
-  const exp=(exps||[]).reduce((a,e)=>a+Number(e.amount),0);
+  const rev=(r1.data||[]).reduce((a,b)=>a+Number(b.amount),0)+(r2.data||[]).reduce((a,s)=>a+Number(s.total),0);
+  const exp=(r3.data||[]).reduce((a,e)=>a+Number(e.amount),0);
   const profit=rev-exp;
   const profitEl=document.getElementById('dash-profit');
-  if(profitEl){profitEl.textContent=fmt(Math.abs(profit))+' ر';profitEl.className='kpi-val '+(profit>=0?'g':'r');}
+  if(profitEl){profitEl.textContent=(profit>=0?'+':'')+fmt(profit)+' ر';profitEl.className='kpi-val '+(profit>=0?'g':'r');}
   setEl('dash-rev',fmt(rev)+' ر');
   setEl('dash-exp',fmt(exp)+' ر');
   setEl('dash-profit-sub','إيرادات '+fmt(rev)+' · مصاريف '+fmt(exp));
