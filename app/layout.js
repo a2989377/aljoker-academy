@@ -3,7 +3,14 @@ import './globals.css'
 export const metadata = {
   title: 'أكاديمية الجوكر',
   description: 'لوحة تحكم أكاديمية الجوكر لكرة القدم',
-  viewport: 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover',
+}
+
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: 'cover',
 }
 
 export default function RootLayout({ children }) {
