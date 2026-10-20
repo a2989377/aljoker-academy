@@ -1,7 +1,11 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
 import { supabase, PINS, ROLES, BRANCHES, MONTHS, EXP_CATS, EXP_COLORS, monthEnd, fmt, uploadReceipt, subStatus, daysBetween } from '../lib/supabase'
-// Inline donut chart - no external dependency
+
+const TODAY = new Date().toISOString().slice(0, 10)
+const avColors = ['list-av-red','list-av-green','list-av-blue','list-av-yellow']
+
+// ============ DONUT CHART ============
 function DonutChart({ labels, vals, colors }) {
   const canvasRef = useRef()
   useEffect(() => {
@@ -9,29 +13,22 @@ function DonutChart({ labels, vals, colors }) {
     if (!canvas || !vals.length) return
     const ctx = canvas.getContext('2d')
     const total = vals.reduce((a,v) => a+v, 0)
-    const cx = 60, cy = 60, r = 50, inner = 34
+    const cx = 60, cy = 60, r = 52, inner = 36
     ctx.clearRect(0, 0, 120, 120)
     let start = -Math.PI/2
     vals.forEach((v, i) => {
       const slice = (v/total) * Math.PI * 2
-      ctx.beginPath()
-      ctx.moveTo(cx, cy)
+      ctx.beginPath(); ctx.moveTo(cx, cy)
       ctx.arc(cx, cy, r, start, start+slice)
-      ctx.closePath()
-      ctx.fillStyle = colors[i]
-      ctx.fill()
+      ctx.closePath(); ctx.fillStyle = colors[i]; ctx.fill()
       start += slice
     })
-    ctx.beginPath()
-    ctx.arc(cx, cy, inner, 0, Math.PI*2)
-    ctx.fillStyle = '#fff'
+    ctx.beginPath(); ctx.arc(cx, cy, inner, 0, Math.PI*2)
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--surface')||'#fff'
     ctx.fill()
   }, [vals, colors])
   return <canvas ref={canvasRef} width={120} height={120} />
 }
-
-const TODAY = new Date().toISOString().slice(0, 10)
-const avColors = ['list-av-red','list-av-green','list-av-blue','list-av-yellow']
 
 // ============ SMALL COMPONENTS ============
 function Toast({ msg, type }) {
@@ -42,8 +39,8 @@ function Toast({ msg, type }) {
 function SyncDot({ syncing }) {
   return (
     <div style={{ display:'flex', alignItems:'center', gap:4 }}>
-      <div style={{ width:7, height:7, borderRadius:'50%', background: syncing ? 'var(--yellow)' : 'var(--green)', boxShadow: syncing ? '0 0 5px var(--yellow)' : '0 0 5px var(--green)', transition:'all .3s' }} />
-      <span style={{ fontSize:9, color:'rgba(255,255,255,.45)' }}>{syncing ? 'جاري المزامنة' : 'متزامن'}</span>
+      <div style={{ width:7, height:7, borderRadius:'50%', background: syncing?'var(--yellow)':'var(--green)', boxShadow: syncing?'0 0 5px var(--yellow)':'0 0 5px var(--green)', transition:'all .3s' }} />
+      <span style={{ fontSize:9, color:'rgba(255,255,255,.45)' }}>{syncing?'جاري المزامنة':'متزامن'}</span>
     </div>
   )
 }
@@ -59,12 +56,11 @@ function Banner({ role, onLogout, onRefresh, syncing, branch, setBranch }) {
           <div className="brand-title">أكاديمية الجوكر</div>
           <div className="brand-sub" style={{ display:'flex', alignItems:'center', gap:6 }}>
             {isOwner ? (
-              <select value={branch} onChange={e => setBranch(e.target.value)}
-                style={{ background:'transparent', border:'none', color:'rgba(255,255,255,.5)', fontSize:10, fontFamily:'inherit', cursor:'pointer', padding:0, outline:'none' }}>
+              <select value={branch} onChange={e => setBranch(e.target.value)} style={{ background:'transparent', border:'none', color:'rgba(255,255,255,.5)', fontSize:10, fontFamily:'inherit', cursor:'pointer', padding:0, outline:'none' }}>
                 {BRANCHES.map(b => <option key={b.id} value={b.id} style={{ background:'#0a0a0a' }}>{b.label}</option>)}
               </select>
             ) : (
-              <span style={{ fontSize:10, color:'rgba(255,255,255,.45)' }}>{r?.branch === 'jazan' ? 'جازان' : 'الرياض'}</span>
+              <span style={{ fontSize:10, color:'rgba(255,255,255,.45)' }}>{r?.branch==='jazan'?'جازان':'الرياض'}</span>
             )}
             <SyncDot syncing={syncing} />
           </div>
@@ -91,11 +87,11 @@ function BottomNav({ role, active, setActive, pendingCount }) {
   }
   return (
     <nav className="bottom-nav">
-      {(tabs[role] || []).map(t => (
-        <button key={t.id} className={`nav-item ${active === t.id ? 'nav-active' : ''}`} onClick={() => setActive(t.id)}>
+      {(tabs[role]||[]).map(t => (
+        <button key={t.id} className={`nav-item ${active===t.id?'nav-active':''}`} onClick={() => setActive(t.id)}>
           <span className="nav-icon">{t.icon}</span>
           <span className="nav-label">{t.label}</span>
-          {t.id === 'dashboard' && pendingCount > 0 && <span className="nav-notif">{pendingCount}</span>}
+          {t.id==='dashboard' && pendingCount>0 && <span className="nav-notif">{pendingCount}</span>}
         </button>
       ))}
     </nav>
@@ -105,10 +101,12 @@ function BottomNav({ role, active, setActive, pendingCount }) {
 function Modal({ open, onClose, title, children }) {
   if (!open) return null
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
-        <div className="modal-handle" />
-        <div className="modal-title">{title}</div>
+    <div className="modal-overlay" onClick={e => e.target===e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxHeight:'85vh', overflowY:'auto' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1.25rem' }}>
+          <div className="modal-title" style={{ margin:0 }}>{title}</div>
+          <button onClick={onClose} style={{ background:'var(--surface2)', border:'1px solid var(--border)', borderRadius:8, width:30, height:30, cursor:'pointer', fontSize:16, color:'var(--t2)', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
+        </div>
         {children}
       </div>
     </div>
@@ -119,8 +117,8 @@ function PaymentBtns({ value, onChange }) {
   return (
     <div className="payment-btns">
       {['نقدي','شبكة','تحويل'].map(m => (
-        <button key={m} className={`pay-btn ${value === m ? 'pay-selected' : ''}`} onClick={() => onChange(m)}>
-          {m === 'نقدي' ? '💵 نقدي' : m === 'شبكة' ? '💳 شبكة' : '📱 تحويل'}
+        <button key={m} className={`pay-btn ${value===m?'pay-selected':''}`} onClick={() => onChange(m)}>
+          {m==='نقدي'?'💵 نقدي':m==='شبكة'?'💳 شبكة':'📱 تحويل'}
         </button>
       ))}
     </div>
@@ -134,16 +132,16 @@ function ReceiptUpload({ label, folder, onUploaded }) {
   async function handleChange(e) {
     const f = e.target.files[0]; if (!f) return
     setFile(f); setUploading(true)
-    try { const url = await uploadReceipt(f, folder); onUploaded(url) } catch (err) { console.error(err) }
+    try { const url = await uploadReceipt(f, folder); onUploaded(url) } catch(err) { console.error(err) }
     setUploading(false)
   }
   return (
     <div className="form-group">
       <label className="form-label">{label} <span style={{ color:'var(--red)' }}>*</span></label>
-      <div className={`receipt-wrap ${file ? 'receipt-has-file' : ''}`} onClick={() => inputRef.current?.click()}>
+      <div className={`receipt-wrap ${file?'receipt-has-file':''}`} onClick={() => inputRef.current?.click()}>
         <div className="receipt-icon">📎</div>
-        <div className={`receipt-text ${file ? 'receipt-text-green' : ''}`}>{uploading ? 'جاري الرفع...' : file ? '✅ '+file.name : 'اضغط لرفع الإيصال'}</div>
-        <input ref={inputRef} type="file" accept="image/*,.pdf" style={{ display:'none' }} onChange={handleChange} />
+        <div className={`receipt-text ${file?'receipt-text-green':''}`}>{uploading?'جاري الرفع...':file?'✅ '+file.name:'اضغط لرفع الإيصال'}</div>
+        <input ref={inputRef} type="file" accept="image/*,.pdf" style={{ display:'none' }} onChange={handleChange}/>
       </div>
       <div className="receipt-note">⚠️ الإيصال مطلوب للدفع غير النقدي</div>
     </div>
@@ -157,7 +155,7 @@ function LoginPage({ onLogin }) {
   const [error, setError] = useState(false)
   function press(d) {
     if (pin.length >= 4) return
-    const p = pin + d; setPin(p)
+    const p = pin+d; setPin(p)
     if (p.length === 4) setTimeout(() => {
       if (p === PINS[role]) { onLogin(role) }
       else { setError(true); setPin('') }
@@ -178,7 +176,7 @@ function LoginPage({ onLogin }) {
           <option value="fields_jazan">مسؤول الملاعب - جازان</option>
         </select>
         <div className="pin-wrap">
-          {[0,1,2,3].map(i => <div key={i} className={`pin-dot ${i < pin.length ? 'pin-filled' : ''}`} />)}
+          {[0,1,2,3].map(i => <div key={i} className={`pin-dot ${i<pin.length?'pin-filled':''}`}/>)}
         </div>
         <div className="numpad">
           {[1,2,3,4,5,6,7,8,9].map(n => <button key={n} className="num-btn" onClick={() => press(String(n))}>{n}</button>)}
@@ -195,48 +193,117 @@ function LoginPage({ onLogin }) {
 // ============ OWNER DASHBOARD ============
 function OwnerDashboard({ toast, refresh, branch }) {
   const [month, setMonth] = useState('2026-10')
-  const [data, setData] = useState({ rev:0, exp:0, profit:0 })
+  const [stats, setStats] = useState({ pitchRev:0, subRev:0, kitRev:0, otherRev:0, exp:0, bookingCount:0, subsCount:0 })
   const [pending, setPending] = useState([])
   const [archive, setArchive] = useState([])
+  const [topSubs, setTopSubs] = useState([])
+  const [busyDays, setBusyDays] = useState([])
+  const [expiringSoon, setExpiringSoon] = useState([])
   const [loading, setLoading] = useState(true)
 
   async function load(m) {
     setLoading(true)
     const start = m+'-01', end = monthEnd(m)
-    const [r1,r2,r3] = await Promise.all([
-      supabase.from('bookings').select('amount').eq('branch', branch).gte('date', start).lte('date', end),
-      supabase.from('sales').select('total,created_at').eq('branch', branch).gte('created_at', start+'T00:00:00').lte('created_at', end+'T23:59:59'),
-      supabase.from('expenses').select('amount').eq('branch', branch).eq('status','approved').gte('date', start).lte('date', end),
+
+    const [bkRes, expRes, subRes, salesRes] = await Promise.all([
+      supabase.from('bookings').select('*').eq('branch', branch).eq('status','approved').gte('date', start).lte('date', end),
+      supabase.from('expenses').select('amount,category').eq('branch', branch).eq('status','approved').gte('date', start).lte('date', end),
+      supabase.from('subscribers').select('*').eq('branch', branch).eq('status','approved'),
+      supabase.from('sales').select('total,created_at').eq('branch', branch).eq('status','approved').gte('created_at', start+'T00:00:00').lte('created_at', end+'T23:59:59'),
     ])
-    const [r4] = await Promise.all([
-      supabase.from('subscribers').select('sub_amount,kit_amount,other_amount').eq('branch', branch),
-    ])
-    const pitchRev = (r1.data||[]).reduce((a,b) => a+Number(b.amount), 0)
-    const salesRev = (r2.data||[]).reduce((a,s) => a+Number(s.total), 0)
-    const subRev = (r4.data||[]).reduce((a,s) => a+Number(s.sub_amount||0), 0)
-    const kitRev = (r4.data||[]).reduce((a,s) => a+Number(s.kit_amount||0), 0)
-    const otherRev = (r4.data||[]).reduce((a,s) => a+Number(s.other_amount||0), 0)
-    const rev = pitchRev + salesRev + subRev + kitRev + otherRev
-    const exp = (r3.data||[]).reduce((a,e) => a+Number(e.amount), 0)
-    setData({ rev, exp, profit: rev-exp })
-    const [p,a] = await Promise.all([
+
+    const bks = bkRes.data||[]
+    const subs = subRes.data||[]
+    const exps = expRes.data||[]
+    const sales = salesRes.data||[]
+
+    // Revenue calc - subscriptions only counted in their start month
+    const monthSubs = subs.filter(s => s.start_date && s.start_date.startsWith(m))
+    const subRev = monthSubs.reduce((a,s) => a+Number(s.sub_amount||0), 0)
+    const kitRev = monthSubs.reduce((a,s) => a+Number(s.kit_amount||0), 0) + sales.reduce((a,s) => a+Number(s.total), 0)
+    const pitchRev = bks.reduce((a,b) => a+Number(b.amount), 0)
+    const otherRev = monthSubs.reduce((a,s) => a+Number(s.other_amount||0), 0)
+    const exp = exps.reduce((a,e) => a+Number(e.amount), 0)
+
+    setStats({ pitchRev, subRev, kitRev, otherRev, exp, bookingCount:bks.length, subsCount:monthSubs.length })
+
+    // Top subscribers
+    const sorted = [...subs].sort((a,b) => Number(b.total_amount||0)-Number(a.total_amount||0)).slice(0,5)
+    setTopSubs(sorted)
+
+    // Busiest booking days
+    const dayCount = {}
+    bks.forEach(b => { dayCount[b.date] = (dayCount[b.date]||0)+1 })
+    const busy = Object.entries(dayCount).sort((a,b) => b[1]-a[1]).slice(0,5).map(([date,count]) => ({ date, count, rev: bks.filter(b=>b.date===date).reduce((a,b)=>a+Number(b.amount),0) }))
+    setBusyDays(busy)
+
+    // Expiring soon
+    const soon = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d !== null && d >= 0 && d <= 14 }).slice(0,5)
+    setExpiringSoon(soon)
+
+    // Pending approvals - all types
+    const [pBk, pEx, pSl, pSub] = await Promise.all([
+      supabase.from('bookings').select('*').eq('branch', branch).eq('status','pending').order('created_at',{ascending:false}),
       supabase.from('expenses').select('*').eq('branch', branch).eq('status','pending').order('created_at',{ascending:false}),
-      supabase.from('expenses').select('*').eq('branch', branch).neq('status','pending').order('approved_at',{ascending:false}).limit(30),
+      supabase.from('sales').select('*').eq('branch', branch).eq('status','pending').order('created_at',{ascending:false}),
+      supabase.from('subscribers').select('*').eq('branch', branch).eq('status','pending').order('created_at',{ascending:false}),
     ])
-    setPending(p.data||[]); setArchive(a.data||[])
+
+    const allPending = [
+      ...(pSub.data||[]).map(r => ({...r, _type:'subscriber', _label:'اشتراك جديد', _amount:r.total_amount, _desc:r.name, _by:r.created_by, _meta:`${r.payment_method}${r.guardian_phone?' · '+r.guardian_phone:''}`})),
+      ...(pBk.data||[]).map(r => ({...r, _type:'booking', _label:'حجز ملعب', _amount:r.amount, _desc:r.booker_name, _by:r.created_by, _meta:`${r.pitch==='small'?'ملعب صغير':'ملعب كبير'} · ${r.date} · ${r.time} · ${r.payment_method}`})),
+      ...(pSl.data||[]).map(r => ({...r, _type:'sale', _label:'بيع مستلزمات', _amount:r.total, _desc:r.item, _by:r.created_by, _meta:`${r.qty} قطعة · ${r.payment_method}`})),
+      ...(pEx.data||[]).map(r => ({...r, _type:'expense', _label:'مصروف', _amount:r.amount, _desc:r.description, _by:r.submitted_by, _meta:`${r.category} · ${r.date} · ${r.payment_method}`})),
+    ].sort((a,b) => new Date(b.created_at)-new Date(a.created_at))
+    setPending(allPending)
+
+    // Archive
+    const [aBk, aEx, aSl, aSub] = await Promise.all([
+      supabase.from('bookings').select('*').eq('branch', branch).neq('status','pending').order('created_at',{ascending:false}).limit(10),
+      supabase.from('expenses').select('*').eq('branch', branch).neq('status','pending').order('approved_at',{ascending:false}).limit(10),
+      supabase.from('sales').select('*').eq('branch', branch).neq('status','pending').order('created_at',{ascending:false}).limit(10),
+      supabase.from('subscribers').select('*').eq('branch', branch).neq('status','pending').order('created_at',{ascending:false}).limit(10),
+    ])
+    const allArchive = [
+      ...(aSub.data||[]).map(r => ({...r, _type:'subscriber', _label:'اشتراك', _amount:r.total_amount, _desc:r.name, _meta:r.payment_method})),
+      ...(aBk.data||[]).map(r => ({...r, _type:'booking', _label:'حجز ملعب', _amount:r.amount, _desc:r.booker_name, _meta:`${r.date} · ${r.payment_method}`})),
+      ...(aSl.data||[]).map(r => ({...r, _type:'sale', _label:'بيع', _amount:r.total, _desc:r.item, _meta:r.payment_method})),
+      ...(aEx.data||[]).map(r => ({...r, _type:'expense', _label:'مصروف', _amount:r.amount, _desc:r.description, _meta:`${r.category} · ${r.payment_method}`})),
+    ].sort((a,b) => new Date(b.created_at||b.approved_at)-new Date(a.created_at||a.approved_at)).slice(0,20)
+    setArchive(allArchive)
     setLoading(false)
   }
 
   useEffect(() => { load(month) }, [month, refresh, branch])
 
-  async function approve(id) {
-    await supabase.from('expenses').update({ status:'approved', approved_by:'المالك', approved_at: new Date().toISOString() }).eq('id', id)
+  async function approveItem(item) {
+    const table = item._type==='subscriber'?'subscribers':item._type==='booking'?'bookings':item._type==='sale'?'sales':'expenses'
+    const updateData = item._type==='expense'
+      ? { status:'approved', approved_by:'المالك', approved_at:new Date().toISOString() }
+      : { status:'approved' }
+    await supabase.from(table).update(updateData).eq('id', item.id)
     toast('✅ تمت الموافقة','success'); load(month)
   }
-  async function reject(id) {
-    await supabase.from('expenses').update({ status:'rejected', approved_by:'المالك', approved_at: new Date().toISOString() }).eq('id', id)
+  async function rejectItem(item) {
+    const table = item._type==='subscriber'?'subscribers':item._type==='booking'?'bookings':item._type==='sale'?'sales':'expenses'
+    const updateData = item._type==='expense'
+      ? { status:'rejected', approved_by:'المالك', approved_at:new Date().toISOString() }
+      : { status:'rejected' }
+    await supabase.from(table).update(updateData).eq('id', item.id)
     toast('تم الرفض','error'); load(month)
   }
+
+  const totalRev = stats.pitchRev + stats.subRev + stats.kitRev + stats.otherRev
+  const profit = totalRev - stats.exp
+  const revenueBreakdown = [
+    { label:'اشتراكات', val:stats.subRev, color:'#CC1F1F', pct: totalRev>0?Math.round(stats.subRev/totalRev*100):0 },
+    { label:'ملاعب', val:stats.pitchRev, color:'#2563eb', pct: totalRev>0?Math.round(stats.pitchRev/totalRev*100):0 },
+    { label:'مستلزمات', val:stats.kitRev, color:'#16a34a', pct: totalRev>0?Math.round(stats.kitRev/totalRev*100):0 },
+    { label:'أخرى', val:stats.otherRev, color:'#f59e0b', pct: totalRev>0?Math.round(stats.otherRev/totalRev*100):0 },
+  ].filter(r => r.val > 0)
+
+  const typeIcon = { subscriber:'👤', booking:'🏟️', sale:'🛍️', expense:'💸' }
+  const typeColor = { subscriber:'badge-b', booking:'badge-r', sale:'badge-g', expense:'badge-o' }
 
   return (
     <div className="page">
@@ -245,71 +312,153 @@ function OwnerDashboard({ toast, refresh, branch }) {
           {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
         </select>
       </div>
+
+      {/* MAIN KPIs */}
       <div className="kpi-grid">
         <div className="kpi kpi-accent kpi-full">
           <div className="kpi-label">صافي الربح</div>
-          <div className={`kpi-val ${data.profit >= 0 ? 'kpi-val-g' : 'kpi-val-r'}`}>{(data.profit >= 0 ? '+' : '')+fmt(data.profit)} ر</div>
-          <div className="kpi-sub">إيرادات {fmt(data.rev)} · مصاريف {fmt(data.exp)}</div>
+          <div className={`kpi-val ${profit>=0?'kpi-val-g':'kpi-val-r'}`}>{(profit>=0?'+':'')+fmt(profit)} ر</div>
+          <div className="kpi-sub">إيرادات {fmt(totalRev)} · مصاريف {fmt(stats.exp)}</div>
         </div>
-        <div className="kpi"><div className="kpi-label">إجمالي الإيرادات</div><div className="kpi-val kpi-val-g">{fmt(data.rev)} ر</div></div>
-        <div className="kpi"><div className="kpi-label">إجمالي المصاريف</div><div className="kpi-val kpi-val-r">{fmt(data.exp)} ر</div></div>
+        <div className="kpi"><div className="kpi-label">الاشتراكات</div><div className="kpi-val kpi-val-g">{fmt(stats.subRev)} ر</div><div className="kpi-sub">{stats.subsCount} مشترك جديد</div></div>
+        <div className="kpi"><div className="kpi-label">الملاعب</div><div className="kpi-val kpi-val-g">{fmt(stats.pitchRev)} ر</div><div className="kpi-sub">{stats.bookingCount} حجز</div></div>
+        <div className="kpi"><div className="kpi-label">المستلزمات</div><div className="kpi-val kpi-val-g">{fmt(stats.kitRev)} ر</div></div>
+        <div className="kpi"><div className="kpi-label">المصاريف</div><div className="kpi-val kpi-val-r">{fmt(stats.exp)} ر</div></div>
       </div>
 
-      {pending.length > 0 && (
-        <div className="card" style={{ borderColor:'var(--orange)', background:'var(--orange-l)', marginBottom:'.75rem' }}>
-          <div className="list-row" style={{ border:'none' }}>
-            <div className="list-left">
-              <div className="list-av list-av-yellow">⏳</div>
-              <div><div className="list-name">مصاريف بانتظار موافقتك</div><div className="list-sub">{pending.length} طلبات معلقة</div></div>
+      {/* REVENUE BREAKDOWN DONUT */}
+      {revenueBreakdown.length > 0 && (
+        <div className="card">
+          <div style={{ padding:'.75rem 1rem', borderBottom:'1px solid var(--border)', fontSize:12, fontWeight:600, color:'var(--t2)' }}>توزيع الإيرادات</div>
+          <div className="donut-wrap">
+            <div style={{ width:120, height:120, flexShrink:0 }}>
+              <DonutChart labels={revenueBreakdown.map(r=>r.label)} vals={revenueBreakdown.map(r=>r.val)} colors={revenueBreakdown.map(r=>r.color)} />
             </div>
-            <span className="badge badge-o">راجع</span>
+            <div className="donut-legend">
+              {revenueBreakdown.map(r => (
+                <div key={r.label} className="donut-row">
+                  <div className="donut-left"><span className="donut-dot" style={{ background:r.color }}/>{r.label}</div>
+                  <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                    <span style={{ fontSize:10, color:'var(--t3)' }}>{r.pct}%</span>
+                    <span className="donut-val">{fmt(r.val)} ر</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
 
-      <div className="sec">طلبات الموافقة</div>
-      {loading ? <div className="loading">جاري التحميل...</div> : pending.length === 0 ? (
-        <div className="empty"><div className="empty-icon">✅</div>لا يوجد طلبات معلقة</div>
-      ) : pending.map(a => (
-        <div key={a.id} className="approval-card">
-          <div className="approval-head">
-            <span style={{ fontSize:11, fontWeight:600, color:'var(--t3)' }}>{a.category}</span>
-            <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-              <span style={{ fontSize:10, color:'var(--t3)' }}>{a.submitted_by}</span>
-              <span className="badge badge-o">معلق</span>
-            </div>
+      {/* PENDING APPROVALS */}
+      {pending.length > 0 && (
+        <div style={{ background:'var(--orange-l)', border:'1px solid #fbbf24', borderRadius:'var(--r)', marginBottom:'.75rem', overflow:'hidden' }}>
+          <div style={{ padding:'.75rem 1rem', borderBottom:'1px solid #fde68a', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <span style={{ fontSize:12, fontWeight:700, color:'var(--orange)' }}>⏳ بانتظار الموافقة ({pending.length})</span>
           </div>
-          <div className="approval-body">
-            <div className="approval-desc">{a.description}</div>
-            <div className="approval-meta">{a.date} · {fmt(a.amount)} ر · {a.payment_method}</div>
-            {a.receipt_url && <a href={a.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
-          </div>
-          <div className="approval-actions">
-            <button className="btn-approve" onClick={() => approve(a.id)}>✓ موافقة</button>
-            <button className="btn-reject" onClick={() => reject(a.id)}>✕ رفض</button>
-          </div>
-        </div>
-      ))}
-
-      <div className="sec">الأرشيف</div>
-      <div className="card">
-        {archive.length === 0 ? <div className="empty"><div className="empty-icon">📁</div>الأرشيف فارغ</div> :
-          archive.map(a => (
-            <div key={a.id} className="list-row">
-              <div className="list-left">
-                <div className={`list-av ${a.status === 'approved' ? 'list-av-green' : 'list-av-red'}`}>{a.status === 'approved' ? '✓' : '✕'}</div>
-                <div>
-                  <div className="list-name">{a.description}</div>
-                  <div className="list-sub">{a.category} · {a.submitted_by} · {a.payment_method}</div>
-                  {a.receipt_url && <a href={a.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
+          {pending.map(item => (
+            <div key={item.id} style={{ padding:'.75rem 1rem', borderBottom:'1px solid #fde68a' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'.5rem' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                  <span style={{ fontSize:16 }}>{typeIcon[item._type]}</span>
+                  <div>
+                    <div style={{ fontSize:13, fontWeight:600, color:'var(--t1)' }}>{item._desc}</div>
+                    <div style={{ fontSize:11, color:'var(--t3)', marginTop:2 }}>{item._meta}</div>
+                    {item._by && <div style={{ fontSize:10, color:'var(--t3)' }}>بواسطة: {item._by}</div>}
+                  </div>
+                </div>
+                <div style={{ textAlign:'left', flexShrink:0 }}>
+                  <span className={`badge ${typeColor[item._type]}`} style={{ fontSize:10, marginBottom:4, display:'block' }}>{item._label}</span>
+                  <span style={{ fontSize:13, fontWeight:700, color:'var(--t1)' }}>{fmt(item._amount)} ر</span>
                 </div>
               </div>
-              <div className="list-right">
-                <span className={`badge ${a.status === 'approved' ? 'badge-g' : 'badge-r'}`}>{fmt(a.amount)} ر</span>
-                <span style={{ fontSize:10, color:'var(--t3)', marginTop:2 }}>{a.status === 'approved' ? 'معتمد' : 'مرفوض'}</span>
+              {item.receipt_url && <a href={item.receipt_url} target="_blank" rel="noreferrer" className="receipt-link" style={{ marginBottom:'.5rem', display:'inline-block' }}>📎 إيصال</a>}
+              <div style={{ display:'flex', gap:.5+'rem' }}>
+                <button className="btn-approve" style={{ flex:1, padding:'.5rem', fontSize:12 }} onClick={() => approveItem(item)}>✓ موافقة</button>
+                <button className="btn-reject" style={{ flex:1, padding:'.5rem', fontSize:12 }} onClick={() => rejectItem(item)}>✕ رفض</button>
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* INSIGHTS ROW */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.75rem', marginBottom:'.75rem' }}>
+        {/* TOP SUBSCRIBERS */}
+        <div className="card" style={{ margin:0 }}>
+          <div style={{ padding:'.6rem .875rem', borderBottom:'1px solid var(--border)', fontSize:11, fontWeight:600, color:'var(--t3)', textTransform:'uppercase', letterSpacing:'.05em' }}>أعلى اشتراكات</div>
+          {topSubs.length === 0 ? <div className="empty" style={{ padding:'1rem' }}>لا بيانات</div> :
+            topSubs.map((s,i) => (
+              <div key={s.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'.5rem .875rem', borderBottom:'1px solid var(--border)' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                  <span style={{ fontSize:11, fontWeight:700, color:'var(--t3)', width:14 }}>{i+1}</span>
+                  <span style={{ fontSize:12, color:'var(--t1)', fontWeight:500 }}>{s.name.split(' ').slice(0,2).join(' ')}</span>
+                </div>
+                <span style={{ fontSize:11, fontWeight:700, color:'var(--green)' }}>{fmt(s.total_amount)} ر</span>
+              </div>
+            ))}
+        </div>
+
+        {/* BUSIEST DAYS */}
+        <div className="card" style={{ margin:0 }}>
+          <div style={{ padding:'.6rem .875rem', borderBottom:'1px solid var(--border)', fontSize:11, fontWeight:600, color:'var(--t3)', textTransform:'uppercase', letterSpacing:'.05em' }}>أكثر أيام حجزاً</div>
+          {busyDays.length === 0 ? <div className="empty" style={{ padding:'1rem' }}>لا بيانات</div> :
+            busyDays.map((d,i) => (
+              <div key={d.date} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'.5rem .875rem', borderBottom:'1px solid var(--border)' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                  <span style={{ fontSize:11, fontWeight:700, color:'var(--t3)', width:14 }}>{i+1}</span>
+                  <div>
+                    <div style={{ fontSize:11, color:'var(--t1)', fontWeight:500 }}>{d.date.slice(5)}</div>
+                    <div style={{ fontSize:10, color:'var(--t3)' }}>{d.count} حجز</div>
+                  </div>
+                </div>
+                <span style={{ fontSize:11, fontWeight:700, color:'var(--blue)' }}>{fmt(d.rev)} ر</span>
+              </div>
+            ))}
+        </div>
+      </div>
+
+      {/* EXPIRING SOON */}
+      {expiringSoon.length > 0 && (
+        <div className="card" style={{ borderColor:'var(--orange)' }}>
+          <div style={{ padding:'.6rem 1rem', borderBottom:'1px solid var(--border)', fontSize:11, fontWeight:600, color:'var(--orange)', display:'flex', alignItems:'center', gap:6 }}>
+            ⚠️ اشتراكات تنتهي قريباً ({expiringSoon.length})
+          </div>
+          {expiringSoon.map(s => {
+            const days = daysBetween(TODAY, s.end_date)
+            return (
+              <div key={s.id} className="list-row">
+                <div className="list-left">
+                  <div className="list-av list-av-yellow">{s.name[0]}</div>
+                  <div><div className="list-name">{s.name}</div><div className="list-sub">ينتهي {s.end_date}</div></div>
+                </div>
+                <span className={`badge ${days<=3?'badge-r':'badge-o'}`} style={{ fontSize:10 }}>{days} أيام</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* ARCHIVE */}
+      <div className="sec">الأرشيف</div>
+      <div className="card">
+        {loading ? <div className="loading">جاري التحميل...</div> :
+          archive.length === 0 ? <div className="empty"><div className="empty-icon">📁</div>الأرشيف فارغ</div> :
+            archive.map((item,i) => (
+              <div key={i} className="list-row">
+                <div className="list-left">
+                  <div style={{ fontSize:18, width:36, textAlign:'center', flexShrink:0 }}>{typeIcon[item._type]}</div>
+                  <div>
+                    <div className="list-name">{item._desc}</div>
+                    <div className="list-sub">{item._label} · {item._meta}</div>
+                    {item.receipt_url && <a href={item.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
+                  </div>
+                </div>
+                <div className="list-right">
+                  <span className={`badge ${item.status==='approved'?'badge-g':'badge-r'}`}>{fmt(item._amount)} ر</span>
+                  <span style={{ fontSize:9, color:'var(--t3)', marginTop:2 }}>{item.status==='approved'?'معتمد':'مرفوض'}</span>
+                </div>
+              </div>
+            ))}
       </div>
     </div>
   )
@@ -323,12 +472,11 @@ function OwnerAcademy({ toast, refresh, branch }) {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
   const [loading, setLoading] = useState(true)
-  const [month, setMonth] = useState('2026-10')
 
   useEffect(() => {
     async function load() {
       const [s, inv] = await Promise.all([
-        supabase.from('subscribers').select('*').eq('branch', branch).order('created_at',{ascending:false}),
+        supabase.from('subscribers').select('*').eq('branch', branch).eq('status','approved').order('created_at',{ascending:false}),
         supabase.from('inventory').select('*').order('name'),
       ])
       setSubs(s.data||[]); setInventory(inv.data||[]); setLoading(false)
@@ -336,13 +484,13 @@ function OwnerAcademy({ toast, refresh, branch }) {
     load()
   }, [refresh, branch])
 
-  const expiringSoon = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d !== null && d >= 0 && d <= 7 })
-  const expired = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d !== null && d < 0 })
+  const expiringSoon = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d!==null && d>=0 && d<=7 })
+  const expired = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d!==null && d<0 })
   let filtered = search ? subs.filter(s => s.name.includes(search)) : subs
-  if (filter === 'expiring') filtered = filtered.filter(s => expiringSoon.find(e => e.id === s.id))
-  if (filter === 'expired') filtered = filtered.filter(s => expired.find(e => e.id === s.id))
-  if (filter === 'bus') filtered = filtered.filter(s => s.has_bus)
-  if (filter === 'kit') filtered = filtered.filter(s => s.has_kit)
+  if (filter==='expiring') filtered = filtered.filter(s => expiringSoon.find(e=>e.id===s.id))
+  if (filter==='expired') filtered = filtered.filter(s => expired.find(e=>e.id===s.id))
+  if (filter==='bus') filtered = filtered.filter(s => s.has_bus)
+  if (filter==='kit') filtered = filtered.filter(s => s.has_kit)
 
   const totalSubRev = subs.reduce((a,s) => a+Number(s.sub_amount||0), 0)
   const busCount = subs.filter(s => s.has_bus).length
@@ -357,30 +505,24 @@ function OwnerAcademy({ toast, refresh, branch }) {
         <button className={`inner-tab ${tab==='other'?'inner-tab-active':''}`} onClick={() => setTab('other')}>الباص والمستلزمات</button>
       </div>
 
-      {tab === 'subs' && (
+      {tab==='subs' && (
         <>
-          <div className="month-bar">
-            <select className="month-select" value={month} onChange={e => setMonth(e.target.value)}>
-              {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-            </select>
-          </div>
           <div className="kpi-grid">
-            <div className="kpi"><div className="kpi-label">إجمالي المشتركين</div><div className="kpi-val">{subs.length}</div><div className="kpi-sub">نشط: {subs.length - expired.length}</div></div>
+            <div className="kpi"><div className="kpi-label">إجمالي المشتركين</div><div className="kpi-val">{subs.length}</div><div className="kpi-sub">نشط: {subs.length-expired.length}</div></div>
             <div className="kpi"><div className="kpi-label">إيرادات الاشتراكات</div><div className="kpi-val kpi-val-g">{fmt(totalSubRev)} ر</div></div>
-            {expiringSoon.length > 0 && <div className="kpi kpi-full" style={{ borderColor:'var(--orange)', background:'var(--orange-l)' }}><div className="kpi-label" style={{ color:'var(--orange)' }}>ينتهي اشتراكهم قريباً</div><div className="kpi-val" style={{ color:'var(--orange)' }}>{expiringSoon.length} مشترك</div><div className="kpi-sub" style={{ color:'var(--orange)' }}>خلال 7 أيام</div></div>}
-            {expired.length > 0 && <div className="kpi kpi-full" style={{ borderColor:'var(--red)', background:'var(--red-l)' }}><div className="kpi-label" style={{ color:'var(--red)' }}>اشتراكات منتهية</div><div className="kpi-val kpi-val-r">{expired.length} مشترك</div></div>}
+            {expiringSoon.length>0 && <div className="kpi kpi-full" style={{ borderColor:'var(--orange)', background:'var(--orange-l)' }}><div className="kpi-label" style={{ color:'var(--orange)' }}>ينتهي قريباً</div><div className="kpi-val" style={{ color:'var(--orange)' }}>{expiringSoon.length} مشترك</div><div className="kpi-sub" style={{ color:'var(--orange)' }}>خلال 7 أيام</div></div>}
           </div>
           <div style={{ display:'flex', gap:'.4rem', overflowX:'auto', marginBottom:'.75rem', scrollbarWidth:'none' }}>
             {[['all','الكل'],['expiring','ينتهي قريباً'],['expired','منتهي'],['bus','الباص'],['kit','اشترى طقم']].map(([v,l]) => (
-              <button key={v} onClick={() => setFilter(v)} style={{ flexShrink:0, padding:'5px 12px', borderRadius:20, border:'1.5px solid', borderColor: filter===v?'var(--red)':'var(--border)', background: filter===v?'var(--red-l)':'var(--surface)', color: filter===v?'var(--red)':'var(--t2)', fontSize:12, cursor:'pointer', fontFamily:'inherit', fontWeight: filter===v?600:400 }}>{l}</button>
+              <button key={v} onClick={() => setFilter(v)} style={{ flexShrink:0, padding:'5px 12px', borderRadius:20, border:'1.5px solid', borderColor:filter===v?'var(--red)':'var(--border)', background:filter===v?'var(--red-l)':'var(--surface)', color:filter===v?'var(--red)':'var(--t2)', fontSize:12, cursor:'pointer', fontFamily:'inherit', fontWeight:filter===v?600:400 }}>{l}</button>
             ))}
           </div>
           <div className="search-wrap" style={{ borderRadius:'var(--r) var(--r) 0 0', border:'1px solid var(--border)' }}>
-            <input className="search-input" placeholder="ابحث باسم المشترك..." value={search} onChange={e => setSearch(e.target.value)} />
+            <input className="search-input" placeholder="ابحث باسم المشترك..." value={search} onChange={e => setSearch(e.target.value)}/>
           </div>
           <div className="card" style={{ borderTop:'none', borderRadius:'0 0 var(--r) var(--r)' }}>
-            {loading ? <div className="loading">جاري التحميل...</div> : filtered.length === 0 ? <div className="empty"><div className="empty-icon">👥</div>لا يوجد مشتركون</div> :
-              filtered.slice(0, 50).map((s, i) => {
+            {loading ? <div className="loading">جاري التحميل...</div> : filtered.length===0 ? <div className="empty"><div className="empty-icon">👥</div>لا يوجد مشتركون</div> :
+              filtered.slice(0,50).map((s,i) => {
                 const st = subStatus(s.end_date)
                 return (
                   <div key={s.id} className="list-row">
@@ -388,7 +530,7 @@ function OwnerAcademy({ toast, refresh, branch }) {
                       <div className={`list-av ${avColors[i%4]}`}>{s.name[0]}</div>
                       <div style={{ minWidth:0 }}>
                         <div className="list-name">{s.name}</div>
-                        <div className="list-sub">{s.sub_amount>0?`${fmt(s.sub_amount)} ر`:''}{s.has_bus?' · باص':''}{s.has_kit?' · طقم':''}{s.end_date?` · حتى ${s.end_date}`:''}</div>
+                        <div className="list-sub">{s.sub_amount>0?`${fmt(s.sub_amount)} ر`:''}{s.has_bus?' · باص':''}{s.has_kit?' · طقم':''}{s.end_date?` · حتى ${s.end_date}`:''}{s.guardian_phone?` · ${s.guardian_phone}`:''}</div>
                       </div>
                     </div>
                     <div className="list-right">
@@ -398,20 +540,16 @@ function OwnerAcademy({ toast, refresh, branch }) {
                   </div>
                 )
               })}
-            {filtered.length > 50 && <div className="empty">+{filtered.length-50} آخرين</div>}
+            {filtered.length>50 && <div className="empty">+{filtered.length-50} آخرين</div>}
           </div>
         </>
       )}
 
-      {tab === 'other' && (
+      {tab==='other' && (
         <>
           <div className="kpi-grid">
             <div className="kpi"><div className="kpi-label">مستخدمو الباص</div><div className="kpi-val">{busCount}</div><div className="kpi-sub">من {subs.length} مشترك</div></div>
-            <div className="kpi">
-              <div className="kpi-label">المبلغ المحصل للباص</div>
-              <div className="kpi-val">{fmt(busRev)} ر</div>
-              <div className="kpi-sub" style={{ color:'var(--orange)', fontSize:10 }}>يُحوَّل لأصحاب الباص</div>
-            </div>
+            <div className="kpi"><div className="kpi-label">المبلغ المحصل للباص</div><div className="kpi-val">{fmt(busRev)} ر</div><div className="kpi-sub" style={{ color:'var(--orange)', fontSize:10 }}>يُحوَّل لأصحاب الباص</div></div>
             <div className="kpi"><div className="kpi-label">اشتروا طقم</div><div className="kpi-val">{kitCount} مشترك</div></div>
             <div className="kpi"><div className="kpi-label">إيراد الطقم</div><div className="kpi-val kpi-val-g">{fmt(kitRev)} ر</div></div>
           </div>
@@ -444,7 +582,7 @@ function OwnerFields({ toast, refresh, branch }) {
   const [month, setMonth] = useState('2026-09')
 
   useEffect(() => {
-    supabase.from('bookings').select('*').eq('branch', branch).order('date',{ascending:false}).then(({data}) => setBookings(data||[]))
+    supabase.from('bookings').select('*').eq('branch', branch).eq('status','approved').order('date',{ascending:false}).then(({data}) => setBookings(data||[]))
   }, [refresh, branch])
 
   const monthBks = bookings.filter(b => b.date?.startsWith(month))
@@ -453,7 +591,7 @@ function OwnerFields({ toast, refresh, branch }) {
   const smallCount = monthBks.filter(b => b.pitch==='small').length
   const bigCount = monthBks.filter(b => b.pitch==='big').length
   const waterCount = monthBks.filter(b => b.water).length
-  const selectedBks = selectedDate ? bookings.filter(b => b.date === selectedDate) : []
+  const selectedBks = selectedDate ? bookings.filter(b => b.date===selectedDate) : []
   const selectedRev = selectedBks.reduce((a,b) => a+Number(b.amount), 0)
 
   const monthNames = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
@@ -465,10 +603,10 @@ function OwnerFields({ toast, refresh, branch }) {
     const daysInPrev = new Date(calYear, calMonth, 0).getDate()
     const startDay = (firstDay+1)%7
     const cells = []
-    for (let i=0; i<startDay; i++) cells.push({ day: daysInPrev-startDay+i+1, other:true })
+    for (let i=0; i<startDay; i++) cells.push({ day:daysInPrev-startDay+i+1, other:true })
     for (let d=1; d<=daysInMonth; d++) {
       const dateStr = `${calYear}-${String(calMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`
-      cells.push({ day:d, dateStr, isToday: dateStr===TODAY, isSelected: dateStr===selectedDate, bookings: bookings.filter(b => b.date===dateStr) })
+      cells.push({ day:d, dateStr, isToday:dateStr===TODAY, isSelected:dateStr===selectedDate, bookings:bookings.filter(b=>b.date===dateStr) })
     }
     const remaining = 42-cells.length
     for (let i=1; i<=remaining; i++) cells.push({ day:i, other:true })
@@ -482,7 +620,7 @@ function OwnerFields({ toast, refresh, branch }) {
         <button className={`inner-tab ${tab==='cal'?'inner-tab-active':''}`} onClick={() => setTab('cal')}>التقويم</button>
       </div>
 
-      {tab === 'stats' && (
+      {tab==='stats' && (
         <>
           <div className="month-bar">
             <select className="month-select" value={month} onChange={e => setMonth(e.target.value)}>
@@ -517,12 +655,12 @@ function OwnerFields({ toast, refresh, branch }) {
         </>
       )}
 
-      {tab === 'cal' && (
+      {tab==='cal' && (
         <>
           <div className="summary-strip">
             <div className="strip-item"><div className="strip-label">اليوم المحدد</div><div className="strip-val">{selectedDate||'—'}</div></div>
-            <div className="strip-item"><div className="strip-label">حجوزات اليوم</div><div className="strip-val">{selectedBks.length}</div></div>
-            <div className="strip-item"><div className="strip-label">إيراد اليوم</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(selectedRev)} ر</div></div>
+            <div className="strip-item"><div className="strip-label">الحجوزات</div><div className="strip-val">{selectedBks.length}</div></div>
+            <div className="strip-item"><div className="strip-label">الإيراد</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(selectedRev)} ر</div></div>
           </div>
           <div className="card" style={{ overflow:'hidden' }}>
             <div className="cal-header">
@@ -543,7 +681,7 @@ function OwnerFields({ toast, refresh, branch }) {
           <div className="sec">حجوزات {selectedDate||'اختر يوماً'}</div>
           <div className="card">
             {!selectedDate ? <div className="empty"><div className="empty-icon">📅</div>اختر يوماً من التقويم</div> :
-              selectedBks.length === 0 ? <div className="empty"><div className="empty-icon">📅</div>لا يوجد حجوزات</div> :
+              selectedBks.length===0 ? <div className="empty"><div className="empty-icon">📅</div>لا يوجد حجوزات</div> :
                 selectedBks.map(b => (
                   <div key={b.id} className="list-row">
                     <div className="list-left">
@@ -594,16 +732,16 @@ function OwnerExpenses({ toast, refresh, branch }) {
       <div className="kpi-grid">
         <div className="kpi kpi-full"><div className="kpi-label">إجمالي المصاريف المعتمدة</div><div className="kpi-val kpi-val-r">{fmt(total)} ر</div></div>
       </div>
-      {!loading && labels.length > 0 && (
+      {!loading && labels.length>0 && (
         <div className="card">
           <div className="donut-wrap">
             <div style={{ width:120, height:120, flexShrink:0 }}>
-              <DonutChart labels={labels} vals={vals} colors={colors} />
+              <DonutChart labels={labels} vals={vals} colors={colors}/>
             </div>
             <div className="donut-legend">
               {labels.map((l,i) => (
                 <div key={l} className="donut-row">
-                  <div className="donut-left"><span className="donut-dot" style={{ background:colors[i] }} />{l}</div>
+                  <div className="donut-left"><span className="donut-dot" style={{ background:colors[i] }}/>{l}</div>
                   <span className="donut-val">{fmt(vals[i])} ر</span>
                 </div>
               ))}
@@ -613,7 +751,7 @@ function OwnerExpenses({ toast, refresh, branch }) {
       )}
       <div className="sec">تفصيل المصاريف</div>
       <div className="card">
-        {loading ? <div className="loading">جاري التحميل...</div> : expenses.length === 0 ? <div className="empty"><div className="empty-icon">💸</div>لا يوجد مصاريف</div> :
+        {loading ? <div className="loading">جاري التحميل...</div> : expenses.length===0 ? <div className="empty"><div className="empty-icon">💸</div>لا يوجد مصاريف</div> :
           expenses.map(e => (
             <div key={e.id} className="list-row">
               <div className="list-left">
@@ -641,7 +779,7 @@ function StaffSubs({ toast, refresh, branch }) {
   const [modal, setModal] = useState(false)
   const [renewModal, setRenewModal] = useState(false)
   const [renewSub, setRenewSub] = useState(null)
-  const [form, setForm] = useState({ name:'', type:'individual', pkg:300, familyCount:2, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:'' })
+  const [form, setForm] = useState({ name:'', type:'individual', pkg:300, familyCount:2, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:'', phone:'' })
   const [renewForm, setRenewForm] = useState({ pkg:300, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:'' })
   const [submitting, setSubmitting] = useState(false)
 
@@ -654,83 +792,102 @@ function StaffSubs({ toast, refresh, branch }) {
   function calcEnd(start, pkg) {
     if (!start) return ''
     const d = new Date(start)
-    d.setMonth(d.getMonth() + (pkg===700||pkg===900 ? 3 : 1))
+    d.setMonth(d.getMonth()+(pkg===700||pkg===900?3:1))
     return d.toISOString().slice(0,10)
   }
 
   async function submit() {
     if (!form.name.trim()) { alert('أدخل الاسم'); return }
-    if (form.payment !== 'نقدي' && !form.receiptUrl) { alert('يجب رفع الإيصال'); return }
+    if (form.payment!=='نقدي' && !form.receiptUrl) { alert('يجب رفع الإيصال'); return }
     setSubmitting(true)
-    const count = form.type==='family' ? form.familyCount : 1
-    const total = form.pkg * count
+    const count = form.type==='family'?form.familyCount:1
+    const total = form.pkg*count
     const { error } = await supabase.from('subscribers').insert({
       name:form.name, type:form.type, package:total,
       sub_amount:total, bus_amount:0, kit_amount:0, other_amount:0, total_amount:total,
       payment_method:form.payment, has_receipt:form.payment!=='نقدي',
       receipt_url:form.receiptUrl||null, has_bus:false, has_kit:false,
       start_date:form.startDate||null, end_date:form.endDate||null,
-      created_by: ROLES[branch==='jazan'?'admin_jazan':'admin_riyadh']?.label,
-      branch
+      guardian_phone:form.phone||null,
+      created_by:ROLES[branch==='jazan'?'admin_jazan':'admin_riyadh']?.label,
+      branch, status:'pending'
     })
     setSubmitting(false)
     if (error) { toast('خطأ في الحفظ','error'); return }
-    toast('✅ تم إضافة المشترك بنجاح','success')
+    toast('✅ تم الإرسال للمالك للموافقة','success')
     setModal(false)
-    setForm({ name:'', type:'individual', pkg:300, familyCount:2, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:calcEnd(TODAY,300) })
+    setForm({ name:'', type:'individual', pkg:300, familyCount:2, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:calcEnd(TODAY,300), phone:'' })
     load()
   }
 
   async function renew() {
     if (!renewSub) return
-    if (renewForm.payment !== 'نقدي' && !renewForm.receiptUrl) { alert('يجب رفع الإيصال'); return }
+    if (renewForm.payment!=='نقدي' && !renewForm.receiptUrl) { alert('يجب رفع الإيصال'); return }
     setSubmitting(true)
     const { error } = await supabase.from('subscribers').update({
-      package: renewForm.pkg,
-      sub_amount: renewForm.pkg,
-      total_amount: renewForm.pkg + Number(renewSub.bus_amount||0) + Number(renewSub.kit_amount||0),
-      payment_method: renewForm.payment,
-      has_receipt: renewForm.payment !== 'نقدي',
-      receipt_url: renewForm.receiptUrl || null,
-      start_date: renewForm.startDate,
-      end_date: renewForm.endDate,
+      package:renewForm.pkg, sub_amount:renewForm.pkg,
+      total_amount:renewForm.pkg+Number(renewSub.bus_amount||0)+Number(renewSub.kit_amount||0),
+      payment_method:renewForm.payment, has_receipt:renewForm.payment!=='نقدي',
+      receipt_url:renewForm.receiptUrl||null,
+      start_date:renewForm.startDate, end_date:renewForm.endDate, status:'pending'
     }).eq('id', renewSub.id)
     setSubmitting(false)
     if (error) { toast('خطأ في التجديد','error'); return }
-    toast('✅ تم تجديد الاشتراك بنجاح','success')
+    toast('✅ تم إرسال التجديد للمالك للموافقة','success')
     setRenewModal(false); setRenewSub(null); load()
   }
 
-  const expiringSoon = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d !== null && d >= 0 && d <= 7 })
-  const expired = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d !== null && d < 0 })
-  let filtered = search ? subs.filter(s => s.name.includes(search)) : subs
+  const approvedSubs = subs.filter(s => s.status==='approved')
+  const pendingSubs = subs.filter(s => s.status==='pending')
+  const expiringSoon = approvedSubs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d!==null && d>=0 && d<=7 })
+  const expired = approvedSubs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d!==null && d<0 })
+  let filtered = search ? approvedSubs.filter(s => s.name.includes(search)) : approvedSubs
   if (filter==='expiring') filtered = filtered.filter(s => expiringSoon.find(e=>e.id===s.id))
   if (filter==='expired') filtered = filtered.filter(s => expired.find(e=>e.id===s.id))
   if (filter==='bus') filtered = filtered.filter(s => s.has_bus)
   if (filter==='kit') filtered = filtered.filter(s => s.has_kit)
 
-  const totalRev = subs.reduce((a,s) => a+Number(s.sub_amount||0), 0)
+  const totalRev = approvedSubs.reduce((a,s) => a+Number(s.sub_amount||0), 0)
 
-  useEffect(() => { setForm(f => ({...f, endDate: calcEnd(f.startDate, f.pkg)})) }, [])
+  useEffect(() => { setForm(f => ({...f, endDate:calcEnd(f.startDate, f.pkg)})) }, [])
 
   return (
     <div className="page">
       <div className="summary-strip">
-        <div className="strip-item"><div className="strip-label">المشتركون</div><div className="strip-val">{subs.length}</div></div>
+        <div className="strip-item"><div className="strip-label">المشتركون</div><div className="strip-val">{approvedSubs.length}</div></div>
         <div className="strip-item"><div className="strip-label">الإجمالي</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(totalRev)} ر</div></div>
-        {expiringSoon.length > 0 && <div className="strip-item"><div className="strip-label">ينتهي قريباً</div><div className="strip-val" style={{ color:'var(--orange)' }}>{expiringSoon.length}</div></div>}
-        {expired.length > 0 && <div className="strip-item"><div className="strip-label">منتهي</div><div className="strip-val" style={{ color:'var(--red)' }}>{expired.length}</div></div>}
+        {pendingSubs.length>0 && <div className="strip-item"><div className="strip-label">معلق</div><div className="strip-val" style={{ color:'var(--orange)' }}>{pendingSubs.length}</div></div>}
+        {expiringSoon.length>0 && <div className="strip-item"><div className="strip-label">ينتهي قريباً</div><div className="strip-val" style={{ color:'var(--orange)' }}>{expiringSoon.length}</div></div>}
       </div>
+
+      {/* PENDING */}
+      {pendingSubs.length>0 && (
+        <>
+          <div className="sec">معلق - بانتظار موافقة المالك</div>
+          <div className="card">
+            {pendingSubs.map((s,i) => (
+              <div key={s.id} className="list-row">
+                <div className="list-left">
+                  <div className="list-av list-av-yellow">{s.name[0]}</div>
+                  <div><div className="list-name">{s.name}</div><div className="list-sub">{fmt(s.total_amount)} ر · {s.payment_method}</div></div>
+                </div>
+                <span className="badge badge-o" style={{ fontSize:10 }}>معلق</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
       <div style={{ display:'flex', gap:'.4rem', overflowX:'auto', marginBottom:'.75rem', scrollbarWidth:'none' }}>
         {[['all','الكل'],['expiring','ينتهي قريباً'],['expired','منتهي'],['bus','الباص'],['kit','اشترى طقم']].map(([v,l]) => (
           <button key={v} onClick={() => setFilter(v)} style={{ flexShrink:0, padding:'5px 12px', borderRadius:20, border:'1.5px solid', borderColor:filter===v?'var(--red)':'var(--border)', background:filter===v?'var(--red-l)':'var(--surface)', color:filter===v?'var(--red)':'var(--t2)', fontSize:12, cursor:'pointer', fontFamily:'inherit', fontWeight:filter===v?600:400 }}>{l}</button>
         ))}
       </div>
       <div className="search-wrap" style={{ borderRadius:'var(--r) var(--r) 0 0', border:'1px solid var(--border)' }}>
-        <input className="search-input" placeholder="ابحث باسم المشترك..." value={search} onChange={e => setSearch(e.target.value)} />
+        <input className="search-input" placeholder="ابحث باسم المشترك..." value={search} onChange={e => setSearch(e.target.value)}/>
       </div>
       <div className="card" style={{ borderTop:'none', borderRadius:'0 0 var(--r) var(--r)' }}>
-        {loading ? <div className="loading">جاري التحميل...</div> : filtered.length === 0 ? <div className="empty"><div className="empty-icon">👥</div>لا يوجد مشتركون</div> :
+        {loading ? <div className="loading">جاري التحميل...</div> : filtered.length===0 ? <div className="empty"><div className="empty-icon">👥</div>لا يوجد مشتركون</div> :
           filtered.slice(0,50).map((s,i) => {
             const st = subStatus(s.end_date)
             return (
@@ -739,14 +896,15 @@ function StaffSubs({ toast, refresh, branch }) {
                   <div className={`list-av ${avColors[i%4]}`}>{s.name[0]}</div>
                   <div style={{ minWidth:0 }}>
                     <div className="list-name">{s.name}</div>
-                    <div className="list-sub">{s.sub_amount>0?`${fmt(s.sub_amount)} ر`:''}{s.has_bus?' · باص':''}{s.has_kit?' · طقم':''}{s.end_date?` · حتى ${s.end_date}`:''}</div>
+                    <div className="list-sub">{s.sub_amount>0?`${fmt(s.sub_amount)} ر`:''}{s.has_bus?' · باص':''}{s.has_kit?' · طقم':''}{s.guardian_phone?` · 📞 ${s.guardian_phone}`:''}</div>
+                    <div className="list-sub">{s.end_date?`حتى ${s.end_date}`:''}</div>
                   </div>
                 </div>
                 <div className="list-right">
                   <div className="list-amt">{fmt(s.total_amount||s.sub_amount)} ر</div>
                   <div style={{ display:'flex', gap:4, marginTop:3 }}>
                     <span className={`badge ${st.cls}`} style={{ fontSize:9 }}>{st.label}</span>
-                    {(st.cls === 'badge-r' || st.cls === 'badge-o') && (
+                    {(st.cls==='badge-r'||st.cls==='badge-o') && (
                       <button onClick={() => { setRenewSub(s); setRenewForm({ pkg:300, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:calcEnd(TODAY,300) }); setRenewModal(true) }}
                         style={{ fontSize:9, background:'var(--green-l)', border:'1px solid var(--green)', borderRadius:5, padding:'2px 6px', color:'var(--green)', cursor:'pointer', fontFamily:'inherit' }}>تجديد</button>
                     )}
@@ -755,10 +913,12 @@ function StaffSubs({ toast, refresh, branch }) {
               </div>
             )
           })}
-        {filtered.length > 50 && <div className="empty">+{filtered.length-50} آخرين</div>}
+        {filtered.length>50 && <div className="empty">+{filtered.length-50} آخرين</div>}
       </div>
+
       <button className="fab" onClick={() => setModal(true)}>👤</button>
 
+      {/* RENEW MODAL */}
       <Modal open={renewModal} onClose={() => setRenewModal(false)} title={`تجديد: ${renewSub?.name||''}`}>
         <div className="form-group">
           <label className="form-label">الباقة الجديدة</label>
@@ -773,12 +933,14 @@ function StaffSubs({ toast, refresh, branch }) {
           <div className="form-group"><label className="form-label">تاريخ الانتهاء</label><input className="form-input" type="date" value={renewForm.endDate} onChange={e => setRenewForm(f=>({...f,endDate:e.target.value}))}/></div>
         </div>
         <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={renewForm.payment} onChange={v => setRenewForm(f=>({...f,payment:v,receiptUrl:''}))}/></div>
-        {renewForm.payment !== 'نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="subscribers" onUploaded={url => setRenewForm(f=>({...f,receiptUrl:url}))}/>}
+        {renewForm.payment!=='نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="subscribers" onUploaded={url => setRenewForm(f=>({...f,receiptUrl:url}))}/>}
         <div className="form-group"><label className="form-label">الإجمالي</label><input className="form-input" readOnly value={fmt(renewForm.pkg)+' ر'} style={{ fontWeight:700, color:'var(--green)' }}/></div>
-        <button className="btn-primary" disabled={submitting} onClick={renew} style={{ background:'var(--green)' }}>{submitting?'جاري التجديد...':'تجديد الاشتراك ✓'}</button>
+        <div className="info-box info-yellow">⚠️ سيتم إرسال التجديد للمالك للموافقة</div>
+        <button className="btn-primary" disabled={submitting} onClick={renew} style={{ background:'var(--green)' }}>{submitting?'جاري الإرسال...':'إرسال للموافقة ✓'}</button>
         <button className="btn-secondary" onClick={() => setRenewModal(false)}>إلغاء</button>
       </Modal>
 
+      {/* ADD MODAL */}
       <Modal open={modal} onClose={() => setModal(false)} title="إضافة مشترك جديد">
         <div className="form-group">
           <label className="form-label">نوع الاشتراك</label>
@@ -788,6 +950,7 @@ function StaffSubs({ toast, refresh, branch }) {
         </div>
         <div className="form-group"><label className="form-label">الاسم</label><input className="form-input" value={form.name} onChange={e => setForm(f=>({...f,name:e.target.value}))} placeholder="اسم المشترك أو العائلة"/></div>
         {form.type==='family' && <div className="form-group"><label className="form-label">عدد اللاعبين</label><input className="form-input" type="number" min="2" max="10" value={form.familyCount} onChange={e => setForm(f=>({...f,familyCount:parseInt(e.target.value)||2}))}/></div>}
+        <div className="form-group"><label className="form-label">رقم ولي الأمر</label><input className="form-input" type="tel" value={form.phone} onChange={e => setForm(f=>({...f,phone:e.target.value}))} placeholder="05XXXXXXXX"/></div>
         <div className="form-group">
           <label className="form-label">الباقة</label>
           <div className="pkg-grid">
@@ -803,7 +966,8 @@ function StaffSubs({ toast, refresh, branch }) {
         <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={form.payment} onChange={v => setForm(f=>({...f,payment:v,receiptUrl:''}))}/></div>
         {form.payment!=='نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="subscribers" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/>}
         <div className="form-group"><label className="form-label">الإجمالي</label><input className="form-input" readOnly value={fmt(form.pkg*(form.type==='family'?form.familyCount:1))+' ر'} style={{ fontWeight:700, color:'var(--red)' }}/></div>
-        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الحفظ...':'إضافة المشترك'}</button>
+        <div className="info-box info-yellow">⚠️ سيتم إرسال الاشتراك للمالك للموافقة</div>
+        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الإرسال...':'إرسال للموافقة'}</button>
         <button className="btn-secondary" onClick={() => setModal(false)}>إلغاء</button>
       </Modal>
     </div>
@@ -814,7 +978,7 @@ function StaffSubs({ toast, refresh, branch }) {
 function StaffBus({ refresh, branch }) {
   const [subs, setSubs] = useState([])
   useEffect(() => {
-    supabase.from('subscribers').select('*').eq('branch', branch).eq('has_bus', true).order('created_at',{ascending:false}).then(({data}) => setSubs(data||[]))
+    supabase.from('subscribers').select('*').eq('branch', branch).eq('has_bus', true).eq('status','approved').order('created_at',{ascending:false}).then(({data}) => setSubs(data||[]))
   }, [refresh, branch])
 
   const busRev = subs.reduce((a,s) => a+Number(s.bus_amount||0), 0)
@@ -830,22 +994,18 @@ function StaffBus({ refresh, branch }) {
           <div className="kpi-label">المبلغ المحصل</div>
           <div className="kpi-val">{fmt(busRev)} ر</div>
         </div>
-        <div className="kpi">
-          <div className="kpi-label">متوسط رسوم الباص</div>
-          <div className="kpi-val">{subs.length > 0 ? fmt(Math.round(busRev/subs.length)) : 0} ر</div>
-        </div>
       </div>
       <div style={{ background:'var(--orange-l)', border:'1px solid #fbbf24', borderRadius:8, padding:'.6rem .875rem', fontSize:12, color:'var(--orange)', marginBottom:'.75rem' }}>
         ⚠️ إيراد الباص ({fmt(busRev)} ر) يُحوَّل لأصحاب الباص ولا يدخل في حسابات الأكاديمية
       </div>
       <div className="sec">قائمة الباص ({subs.length} مشترك)</div>
       <div className="card">
-        {subs.length === 0 ? <div className="empty"><div className="empty-icon">🚌</div>لا يوجد مشتركون بالباص</div> :
+        {subs.length===0 ? <div className="empty"><div className="empty-icon">🚌</div>لا يوجد مشتركون بالباص</div> :
           subs.map((s,i) => (
             <div key={s.id} className="list-row">
               <div className="list-left">
                 <div className="list-av list-av-blue">{s.name[0]}</div>
-                <div><div className="list-name">{s.name}</div><div className="list-sub">{s.payment_method}</div></div>
+                <div><div className="list-name">{s.name}</div><div className="list-sub">{s.payment_method}{s.guardian_phone?` · 📞 ${s.guardian_phone}`:''}</div></div>
               </div>
               <span className="badge badge-b">{fmt(s.bus_amount||150)} ر</span>
             </div>
@@ -874,22 +1034,25 @@ function StaffInventory({ toast, refresh, branch }) {
   }
   useEffect(() => { load() }, [refresh])
 
-  const monthSales = sales.filter(s => s.created_at?.startsWith(month))
+  const approvedSales = sales.filter(s => s.status==='approved')
+  const pendingSales = sales.filter(s => s.status==='pending')
+  const monthSales = approvedSales.filter(s => s.created_at?.startsWith(month))
   const monthRevenue = monthSales.reduce((a,s) => a+Number(s.total), 0)
 
   async function submit() {
     if (!form.price) { alert('أدخل السعر'); return }
-    if (form.payment !== 'نقدي' && !form.receiptUrl) { alert('يجب رفع الإيصال'); return }
+    if (form.payment!=='نقدي' && !form.receiptUrl) { alert('يجب رفع الإيصال'); return }
     setSubmitting(true)
     const { error } = await supabase.from('sales').insert({
-      item: selectedItem.name, qty: form.qty, price: form.price,
-      total: form.qty*form.price, payment_method: form.payment,
-      has_receipt: form.payment!=='نقدي', receipt_url: form.receiptUrl||null,
-      created_by: ROLES[branch==='jazan'?'admin_jazan':'admin_riyadh']?.label, branch
+      item:selectedItem.name, qty:form.qty, price:form.price,
+      total:form.qty*form.price, payment_method:form.payment,
+      has_receipt:form.payment!=='نقدي', receipt_url:form.receiptUrl||null,
+      created_by:ROLES[branch==='jazan'?'admin_jazan':'admin_riyadh']?.label,
+      branch, status:'pending'
     })
     setSubmitting(false)
     if (error) { toast('خطأ في الحفظ','error'); return }
-    toast('✅ تم تسجيل البيع بنجاح','success')
+    toast('✅ تم الإرسال للمالك للموافقة','success')
     setModal(false); load()
   }
 
@@ -910,6 +1073,9 @@ function StaffInventory({ toast, refresh, branch }) {
         <div className="kpi"><div className="kpi-label">مبيعات الشهر</div><div className="kpi-val kpi-val-g">{fmt(monthRevenue)} ر</div></div>
         <div className="kpi"><div className="kpi-label">عدد المبيعات</div><div className="kpi-val">{monthSales.length}</div></div>
       </div>
+      {pendingSales.length>0 && (
+        <div className="info-box info-yellow">{pendingSales.length} مبيعات بانتظار موافقة المالك</div>
+      )}
       <div className="store-grid">
         {inventory.map(item => (
           <div key={item.id} className="store-card">
@@ -925,7 +1091,7 @@ function StaffInventory({ toast, refresh, branch }) {
       </div>
       <div className="sec">سجل المبيعات</div>
       <div className="card">
-        {sales.length === 0 ? <div className="empty"><div className="empty-icon">🛍️</div>لا يوجد مبيعات</div> :
+        {sales.length===0 ? <div className="empty"><div className="empty-icon">🛍️</div>لا يوجد مبيعات</div> :
           sales.map(s => (
             <div key={s.id} className="list-row">
               <div className="list-left">
@@ -936,11 +1102,14 @@ function StaffInventory({ toast, refresh, branch }) {
                   {s.receipt_url && <a href={s.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
                 </div>
               </div>
-              <span className="badge badge-g">{fmt(s.total)} ر</span>
+              <div className="list-right">
+                <span className="badge badge-g">{fmt(s.total)} ر</span>
+                {s.status==='pending' && <span className="badge badge-o" style={{ fontSize:9, marginTop:3 }}>معلق</span>}
+              </div>
             </div>
           ))}
       </div>
-      <button className="fab" onClick={() => { setSelectedItem(inventory[0]); setForm({ qty:1, price:inventory[0]?.price||0, payment:'نقدي', receiptUrl:'' }); setModal(true) }}>🛍️</button>
+      <button className="fab" onClick={() => { if(inventory.length>0){ setSelectedItem(inventory[0]); setForm({ qty:1, price:inventory[0]?.price||0, payment:'نقدي', receiptUrl:'' }); setModal(true) } }}>🛍️</button>
       <Modal open={modal} onClose={() => setModal(false)} title="تسجيل بيع">
         <div className="form-group">
           <label className="form-label">الصنف</label>
@@ -949,26 +1118,21 @@ function StaffInventory({ toast, refresh, branch }) {
           </select>
         </div>
         <div className="form-row">
-          <div className="form-group">
-            <label className="form-label">الكمية</label>
-            <input className="form-input" type="number" min="1" value={form.qty} onChange={e => setForm(f=>({...f,qty:parseInt(e.target.value)||1}))}/>
-          </div>
-          <div className="form-group">
-            <label className="form-label">السعر (ر)</label>
-            <input className="form-input" type="number" value={form.price} onChange={e => setForm(f=>({...f,price:parseInt(e.target.value)||0}))}/>
-          </div>
+          <div className="form-group"><label className="form-label">الكمية</label><input className="form-input" type="number" min="1" value={form.qty} onChange={e => setForm(f=>({...f,qty:parseInt(e.target.value)||1}))}/></div>
+          <div className="form-group"><label className="form-label">السعر (ر)</label><input className="form-input" type="number" value={form.price} onChange={e => setForm(f=>({...f,price:parseInt(e.target.value)||0}))}/></div>
         </div>
-        <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={form.payment} onChange={v => setForm(f=>({...f,payment:v,receiptUrl:''}))} /></div>
-        {form.payment !== 'نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="sales" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/>}
+        <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={form.payment} onChange={v => setForm(f=>({...f,payment:v,receiptUrl:''}))}/></div>
+        {form.payment!=='نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="sales" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/>}
         <div className="form-group"><label className="form-label">الإجمالي</label><input className="form-input" readOnly value={fmt(form.qty*form.price)+' ر'} style={{ fontWeight:700, color:'var(--red)' }}/></div>
-        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الحفظ...':'تسجيل البيع'}</button>
+        <div className="info-box info-yellow">⚠️ سيتم إرسال البيع للمالك للموافقة</div>
+        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الإرسال...':'إرسال للموافقة'}</button>
         <button className="btn-secondary" onClick={() => setModal(false)}>إلغاء</button>
       </Modal>
     </div>
   )
 }
 
-// ============ MY EXPENSES (STAFF) ============
+// ============ MY EXPENSES ============
 function MyExpenses({ role, toast, refresh, branch }) {
   const [month, setMonth] = useState('2026-09')
   const [pending, setPending] = useState([])
@@ -988,8 +1152,8 @@ function MyExpenses({ role, toast, refresh, branch }) {
   useEffect(() => { load(month) }, [month, refresh])
 
   async function submit() {
-    if (!form.cat || !form.desc || !form.amount) { alert('أكمل جميع الحقول واختر التصنيف'); return }
-    if (form.payment !== 'نقدي' && !form.receiptUrl) { alert('يجب رفع الإيصال'); return }
+    if (!form.cat||!form.desc||!form.amount) { alert('أكمل جميع الحقول واختر التصنيف'); return }
+    if (form.payment!=='نقدي' && !form.receiptUrl) { alert('يجب رفع الإيصال'); return }
     setSubmitting(true)
     const { error } = await supabase.from('expenses').insert({
       category:form.cat, description:form.desc, amount:parseFloat(form.amount),
@@ -1006,32 +1170,58 @@ function MyExpenses({ role, toast, refresh, branch }) {
 
   return (
     <div className="page">
+      {/* EXPENSE FORM - Sugar Treat style */}
+      <div className="card" style={{ marginBottom:'.75rem' }}>
+        <div style={{ padding:'.875rem 1rem', borderBottom:'1px solid var(--border)' }}>
+          <div style={{ fontSize:13, fontWeight:700, color:'var(--red)', marginBottom:'.875rem' }}>تسجيل مصروف جديد</div>
+          <div className="cat-grid" style={{ marginBottom:'.75rem' }}>
+            {[['رواتب','👤'],['كهرباء','⚡'],['إنترنت','🌐'],['ماء فاتورة','🚰'],['مياه مخزون','💧'],['صيانة','🔧'],['محامي','⚖️'],['تأمينات','🛡️'],['باص','🚌'],['أخرى','📦']].map(([c,ic]) => (
+              <button key={c} className={`cat-btn ${form.cat===c?'cat-selected':''}`} onClick={() => setForm(f=>({...f,cat:c}))}>{ic} {c}</button>
+            ))}
+          </div>
+          <div className="form-group"><input className="form-input" value={form.desc} onChange={e => setForm(f=>({...f,desc:e.target.value}))} placeholder="الوصف"/></div>
+          <div className="form-row" style={{ marginBottom:'.75rem' }}>
+            <input className="form-input" type="number" value={form.amount} onChange={e => setForm(f=>({...f,amount:e.target.value}))} placeholder="المبلغ (ر)"/>
+            <input className="form-input" type="date" value={form.date} onChange={e => setForm(f=>({...f,date:e.target.value}))}/>
+          </div>
+          <PaymentBtns value={form.payment} onChange={v => setForm(f=>({...f,payment:v,receiptUrl:''}))}/>
+          {form.payment!=='نقدي' && <div style={{ marginTop:'.75rem' }}><ReceiptUpload label="إرفاق الإيصال" folder="expenses" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/></div>}
+          <button className="btn-primary" style={{ marginTop:'.75rem' }} disabled={submitting} onClick={submit}>{submitting?'جاري الإرسال...':'إرسال للموافقة ⟶'}</button>
+        </div>
+      </div>
+
+      {/* TABS */}
       <div className="month-bar">
         <select className="month-select" value={month} onChange={e => { setMonth(e.target.value); load(e.target.value) }}>
           {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
         </select>
       </div>
+
       <div className="summary-strip">
         <div className="strip-item"><div className="strip-label">معلق</div><div className="strip-val" style={{ color:'var(--red)' }}>{pending.length}</div></div>
         <div className="strip-item"><div className="strip-label">معتمد هذا الشهر</div><div className="strip-val" style={{ color:'var(--green)' }}>{approved.length}</div></div>
         <div className="strip-item"><div className="strip-label">إجمالي معتمد</div><div className="strip-val">{fmt(approved.reduce((a,e)=>a+Number(e.amount),0))} ر</div></div>
       </div>
-      <div className="info-box info-yellow">⚠️ كل المصاريف تحتاج موافقة المالك قبل الاعتماد</div>
-      <div className="sec">مصاريفي المعلقة</div>
-      {pending.length === 0 ? <div className="empty"><div className="empty-icon">✅</div>لا يوجد مصاريف معلقة</div> :
-        pending.map(a => (
-          <div key={a.id} className="approval-card">
-            <div className="approval-head"><span style={{ fontSize:11, fontWeight:600, color:'var(--t3)' }}>{a.category}</span><span className="badge badge-o">معلق</span></div>
-            <div className="approval-body">
-              <div className="approval-desc">{a.description}</div>
-              <div className="approval-meta">{a.date} · {fmt(a.amount)} ر · {a.payment_method}</div>
-              {a.receipt_url && <a href={a.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
+
+      {pending.length>0 && (
+        <>
+          <div className="sec">بانتظار الموافقة</div>
+          {pending.map(a => (
+            <div key={a.id} className="approval-card">
+              <div className="approval-head"><span style={{ fontSize:11, fontWeight:600, color:'var(--t3)' }}>{a.category}</span><span className="badge badge-o">معلق</span></div>
+              <div className="approval-body">
+                <div className="approval-desc">{a.description}</div>
+                <div className="approval-meta">{a.date} · {fmt(a.amount)} ر · {a.payment_method}</div>
+                {a.receipt_url && <a href={a.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
+              </div>
             </div>
-          </div>
-        ))}
-      <div className="sec">مصاريفي المعتمدة</div>
+          ))}
+        </>
+      )}
+
+      <div className="sec">المعتمدة</div>
       <div className="card">
-        {approved.length === 0 ? <div className="empty"><div className="empty-icon">📁</div>لا يوجد مصاريف معتمدة</div> :
+        {approved.length===0 ? <div className="empty"><div className="empty-icon">📁</div>لا يوجد مصاريف معتمدة</div> :
           approved.map(e => (
             <div key={e.id} className="list-row">
               <div className="list-left">
@@ -1046,27 +1236,6 @@ function MyExpenses({ role, toast, refresh, branch }) {
             </div>
           ))}
       </div>
-      <button className="fab" onClick={() => setModal(true)}>💸</button>
-      <Modal open={modal} onClose={() => setModal(false)} title="تسجيل مصروف">
-        <div className="form-group">
-          <label className="form-label">التصنيف</label>
-          <div className="cat-grid">
-            {[['رواتب','👤'],['كهرباء','⚡'],['إنترنت','🌐'],['ماء فاتورة','🚰'],['مياه مخزون','💧'],['صيانة','🔧'],['محامي','⚖️'],['تأمينات','🛡️'],['باص','🚌'],['أخرى','📦']].map(([c,ic]) => (
-              <button key={c} className={`cat-btn ${form.cat===c?'cat-selected':''}`} onClick={() => setForm(f=>({...f,cat:c}))}>{ic} {c}</button>
-            ))}
-          </div>
-        </div>
-        <div className="form-group"><label className="form-label">الوصف</label><input className="form-input" value={form.desc} onChange={e => setForm(f=>({...f,desc:e.target.value}))} placeholder="وصف المصروف"/></div>
-        <div className="form-row">
-          <div className="form-group"><label className="form-label">المبلغ (ر)</label><input className="form-input" type="number" value={form.amount} onChange={e => setForm(f=>({...f,amount:e.target.value}))}/></div>
-          <div className="form-group"><label className="form-label">التاريخ</label><input className="form-input" type="date" value={form.date} onChange={e => setForm(f=>({...f,date:e.target.value}))}/></div>
-        </div>
-        <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={form.payment} onChange={v => setForm(f=>({...f,payment:v,receiptUrl:''}))} /></div>
-        {form.payment !== 'نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="expenses" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/>}
-        <div className="info-box info-yellow" style={{ marginTop:'.75rem' }}>⚠️ سيتم إرسال هذا المصروف للمالك للموافقة</div>
-        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الإرسال...':'إرسال للموافقة'}</button>
-        <button className="btn-secondary" onClick={() => setModal(false)}>إلغاء</button>
-      </Modal>
     </div>
   )
 }
@@ -1091,19 +1260,19 @@ function FieldsCal({ role, toast, refresh, branch }) {
 
   async function submit() {
     if (!form.name.trim()) { alert('أدخل اسم الحاجز'); return }
-    if (form.payment !== 'نقدي' && !form.receiptUrl) { alert('يجب رفع الإيصال'); return }
-    const base = pitch==='small' ? 250 : 300
-    const amount = base + (water ? 20 : 0)
+    if (form.payment!=='نقدي' && !form.receiptUrl) { alert('يجب رفع الإيصال'); return }
+    const base = pitch==='small'?250:300
+    const amount = base+(water?20:0)
     setSubmitting(true)
     const { error } = await supabase.from('bookings').insert({
       pitch, booker_name:form.name, date:form.date, time:form.time, water, amount,
       payment_method:form.payment, has_receipt:form.payment!=='نقدي',
       receipt_url:form.receiptUrl||null,
-      created_by: ROLES[role]?.label, branch
+      created_by:ROLES[role]?.label, branch, status:'pending'
     })
     setSubmitting(false)
     if (error) { toast('خطأ في الحفظ','error'); return }
-    toast('✅ تم تسجيل الحجز بنجاح','success')
+    toast('✅ تم الإرسال للمالك للموافقة','success')
     setModal(false)
     setForm({ name:'', date:TODAY, time:'', payment:'نقدي', receiptUrl:'' })
     setWater(false); load()
@@ -1111,13 +1280,15 @@ function FieldsCal({ role, toast, refresh, branch }) {
 
   const monthNames = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
   const dayNames = ['ح','ن','ث','ر','خ','ج','س']
-  const todayBks = bookings.filter(b => b.date === TODAY)
+  const approvedBookings = bookings.filter(b => b.status==='approved')
+  const pendingBookings = bookings.filter(b => b.status==='pending')
+  const todayBks = approvedBookings.filter(b => b.date===TODAY)
   const todayRev = todayBks.reduce((a,b) => a+Number(b.amount), 0)
-  const monthBks = bookings.filter(b => b.date?.startsWith(TODAY.slice(0,7)))
+  const monthBks = approvedBookings.filter(b => b.date?.startsWith(TODAY.slice(0,7)))
   const monthRev = monthBks.reduce((a,b) => a+Number(b.amount), 0)
-  const selectedBks = selectedDate ? bookings.filter(b => b.date === selectedDate) : []
-  const selectedRev = selectedBks.reduce((a,b) => a+Number(b.amount), 0)
-  const base = pitch==='small' ? 250 : 300
+  const selectedBks = selectedDate ? bookings.filter(b => b.date===selectedDate) : []
+  const selectedRev = selectedBks.filter(b=>b.status==='approved').reduce((a,b) => a+Number(b.amount), 0)
+  const base = pitch==='small'?250:300
 
   function renderCal() {
     const firstDay = new Date(calYear, calMonth, 1).getDay()
@@ -1125,10 +1296,10 @@ function FieldsCal({ role, toast, refresh, branch }) {
     const daysInPrev = new Date(calYear, calMonth, 0).getDate()
     const startDay = (firstDay+1)%7
     const cells = []
-    for (let i=0; i<startDay; i++) cells.push({ day: daysInPrev-startDay+i+1, other:true })
+    for (let i=0; i<startDay; i++) cells.push({ day:daysInPrev-startDay+i+1, other:true })
     for (let d=1; d<=daysInMonth; d++) {
       const dateStr = `${calYear}-${String(calMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`
-      cells.push({ day:d, dateStr, isToday: dateStr===TODAY, isSelected: dateStr===selectedDate, bookings: bookings.filter(b => b.date===dateStr) })
+      cells.push({ day:d, dateStr, isToday:dateStr===TODAY, isSelected:dateStr===selectedDate, bookings:approvedBookings.filter(b=>b.date===dateStr) })
     }
     const remaining = 42-cells.length
     for (let i=1; i<=remaining; i++) cells.push({ day:i, other:true })
@@ -1138,10 +1309,15 @@ function FieldsCal({ role, toast, refresh, branch }) {
   return (
     <div className="page">
       <div className="summary-strip">
-        <div className="strip-item"><div className="strip-label">{selectedDate ? 'إيراد اليوم المحدد' : 'إيراد اليوم'}</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(selectedDate ? selectedRev : todayRev)} ر</div></div>
-        <div className="strip-item"><div className="strip-label">{selectedDate ? 'حجوزات اليوم المحدد' : 'حجوزات اليوم'}</div><div className="strip-val">{selectedDate ? selectedBks.length : todayBks.length}</div></div>
+        <div className="strip-item"><div className="strip-label">{selectedDate?'إيراد اليوم المحدد':'إيراد اليوم'}</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(selectedDate?selectedRev:todayRev)} ر</div></div>
+        <div className="strip-item"><div className="strip-label">{selectedDate?'حجوزات المحددة':'حجوزات اليوم'}</div><div className="strip-val">{selectedDate?selectedBks.length:todayBks.length}</div></div>
         <div className="strip-item"><div className="strip-label">إيراد الشهر</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(monthRev)} ر</div></div>
       </div>
+
+      {pendingBookings.length>0 && (
+        <div className="info-box info-yellow">{pendingBookings.length} حجوزات بانتظار موافقة المالك</div>
+      )}
+
       <div className="card" style={{ overflow:'hidden' }}>
         <div className="cal-header">
           <button className="cal-nav" onClick={() => { if(calMonth===0){setCalMonth(11);setCalYear(y=>y-1)}else setCalMonth(m=>m-1) }}>›</button>
@@ -1158,10 +1334,10 @@ function FieldsCal({ role, toast, refresh, branch }) {
           ))}
         </div>
       </div>
-      <div className="sec">حجوزات {selectedDate || 'اختر يوماً'}</div>
+      <div className="sec">حجوزات {selectedDate||'اختر يوماً'}</div>
       <div className="card">
         {!selectedDate ? <div className="empty"><div className="empty-icon">📅</div>اختر يوماً من التقويم</div> :
-          selectedBks.length === 0 ? <div className="empty"><div className="empty-icon">📅</div>لا يوجد حجوزات</div> :
+          selectedBks.length===0 ? <div className="empty"><div className="empty-icon">📅</div>لا يوجد حجوزات</div> :
             selectedBks.map(b => (
               <div key={b.id} className="list-row">
                 <div className="list-left">
@@ -1172,11 +1348,16 @@ function FieldsCal({ role, toast, refresh, branch }) {
                     {b.receipt_url && <a href={b.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
                   </div>
                 </div>
-                <span className={`badge ${b.pitch==='small'?'badge-b':'badge-r'}`}>{fmt(b.amount)} ر</span>
+                <div className="list-right">
+                  <span className={`badge ${b.pitch==='small'?'badge-b':'badge-r'}`}>{fmt(b.amount)} ر</span>
+                  {b.status==='pending' && <span className="badge badge-o" style={{ fontSize:9, marginTop:3 }}>معلق</span>}
+                </div>
               </div>
             ))}
       </div>
+
       <button className="fab" onClick={() => setModal(true)}>📅</button>
+
       <Modal open={modal} onClose={() => setModal(false)} title="حجز ملعب جديد">
         <div className="form-group">
           <label className="form-label">اختر الملعب</label>
@@ -1197,10 +1378,11 @@ function FieldsCal({ role, toast, refresh, branch }) {
             <div className={`toggle-switch ${water?'toggle-on':''}`}/>
           </div>
         </div>
-        <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={form.payment} onChange={v => setForm(f=>({...f,payment:v,receiptUrl:''}))} /></div>
-        {form.payment !== 'نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="bookings" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/>}
+        <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={form.payment} onChange={v => setForm(f=>({...f,payment:v,receiptUrl:''}))}/></div>
+        {form.payment!=='نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="bookings" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/>}
         <div className="form-group"><label className="form-label">الإجمالي</label><input className="form-input" readOnly value={fmt(base+(water?20:0))+' ر'} style={{ fontWeight:700, color:'var(--red)' }}/></div>
-        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الحفظ...':'تسجيل الحجز'}</button>
+        <div className="info-box info-yellow">⚠️ سيتم إرسال الحجز للمالك للموافقة</div>
+        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الإرسال...':'إرسال للموافقة'}</button>
         <button className="btn-secondary" onClick={() => setModal(false)}>إلغاء</button>
       </Modal>
     </div>
@@ -1229,48 +1411,55 @@ export default function App() {
   }
 
   function logout() { setRole(null); setActiveTab(null) }
-
   function handleRefresh() { setSyncing(true); setRefreshKey(k=>k+1); setTimeout(() => setSyncing(false), 1500) }
 
   useEffect(() => {
-    if (role === 'owner') {
-      supabase.from('expenses').select('id',{count:'exact'}).eq('branch', branch).eq('status','pending').then(({count}) => setPendingCount(count||0))
+    if (role==='owner') {
+      Promise.all([
+        supabase.from('expenses').select('id',{count:'exact'}).eq('branch', branch).eq('status','pending'),
+        supabase.from('bookings').select('id',{count:'exact'}).eq('branch', branch).eq('status','pending'),
+        supabase.from('sales').select('id',{count:'exact'}).eq('branch', branch).eq('status','pending'),
+        supabase.from('subscribers').select('id',{count:'exact'}).eq('branch', branch).eq('status','pending'),
+      ]).then(results => {
+        const total = results.reduce((a,r) => a+(r.count||0), 0)
+        setPendingCount(total)
+      })
     }
   }, [role, activeTab, refreshKey, branch])
 
-  if (!role) return <LoginPage onLogin={login} />
+  if (!role) return <LoginPage onLogin={login}/>
 
-  const isOwner = role === 'owner'
-  const isAdmin = role === 'admin_riyadh' || role === 'admin_jazan'
-  const isFields = role === 'fields_riyadh' || role === 'fields_jazan'
-  const userBranch = ROLES[role]?.branch || branch
+  const isOwner = role==='owner'
+  const isAdmin = role==='admin_riyadh'||role==='admin_jazan'
+  const isFields = role==='fields_riyadh'||role==='fields_jazan'
+  const userBranch = ROLES[role]?.branch||branch
 
   const renderPage = () => {
     if (isOwner) {
-      if (activeTab === 'dashboard') return <OwnerDashboard toast={showToast} refresh={refreshKey} branch={branch} />
-      if (activeTab === 'academy')   return <OwnerAcademy  toast={showToast} refresh={refreshKey} branch={branch} />
-      if (activeTab === 'fields')    return <OwnerFields   toast={showToast} refresh={refreshKey} branch={branch} />
-      if (activeTab === 'expenses')  return <OwnerExpenses toast={showToast} refresh={refreshKey} branch={branch} />
+      if (activeTab==='dashboard') return <OwnerDashboard toast={showToast} refresh={refreshKey} branch={branch}/>
+      if (activeTab==='academy')   return <OwnerAcademy  toast={showToast} refresh={refreshKey} branch={branch}/>
+      if (activeTab==='fields')    return <OwnerFields   toast={showToast} refresh={refreshKey} branch={branch}/>
+      if (activeTab==='expenses')  return <OwnerExpenses toast={showToast} refresh={refreshKey} branch={branch}/>
     }
     if (isAdmin) {
-      if (activeTab === 'subs')        return <StaffSubs      toast={showToast} refresh={refreshKey} branch={userBranch} />
-      if (activeTab === 'bus')         return <StaffBus                         refresh={refreshKey} branch={userBranch} />
-      if (activeTab === 'inventory')   return <StaffInventory toast={showToast} refresh={refreshKey} branch={userBranch} />
-      if (activeTab === 'my-expenses') return <MyExpenses role={role} toast={showToast} refresh={refreshKey} branch={userBranch} />
+      if (activeTab==='subs')        return <StaffSubs      toast={showToast} refresh={refreshKey} branch={userBranch}/>
+      if (activeTab==='bus')         return <StaffBus                         refresh={refreshKey} branch={userBranch}/>
+      if (activeTab==='inventory')   return <StaffInventory toast={showToast} refresh={refreshKey} branch={userBranch}/>
+      if (activeTab==='my-expenses') return <MyExpenses role={role} toast={showToast} refresh={refreshKey} branch={userBranch}/>
     }
     if (isFields) {
-      if (activeTab === 'cal')         return <FieldsCal  role={role} toast={showToast} refresh={refreshKey} branch={userBranch} />
-      if (activeTab === 'my-expenses') return <MyExpenses role={role} toast={showToast} refresh={refreshKey} branch={userBranch} />
+      if (activeTab==='cal')         return <FieldsCal  role={role} toast={showToast} refresh={refreshKey} branch={userBranch}/>
+      if (activeTab==='my-expenses') return <MyExpenses role={role} toast={showToast} refresh={refreshKey} branch={userBranch}/>
     }
     return null
   }
 
   return (
     <>
-      <Banner role={role} onLogout={logout} onRefresh={handleRefresh} syncing={syncing} branch={branch} setBranch={setBranch} />
+      <Banner role={role} onLogout={logout} onRefresh={handleRefresh} syncing={syncing} branch={branch} setBranch={setBranch}/>
       {renderPage()}
-      <BottomNav role={role} active={activeTab} setActive={setActiveTab} pendingCount={pendingCount} />
-      <Toast msg={toastMsg} type={toastType} />
+      <BottomNav role={role} active={activeTab} setActive={setActiveTab} pendingCount={pendingCount}/>
+      <Toast msg={toastMsg} type={toastType}/>
     </>
   )
 }
