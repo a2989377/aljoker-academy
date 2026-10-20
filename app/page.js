@@ -1,9 +1,34 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
 import { supabase, PINS, ROLES, BRANCHES, MONTHS, EXP_CATS, EXP_COLORS, monthEnd, fmt, uploadReceipt, subStatus, daysBetween } from '../lib/supabase'
-import { Doughnut } from 'react-chartjs-2'
-import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement } from 'chart.js'
-ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement)
+// Inline donut chart - no external dependency
+function DonutChart({ labels, vals, colors }) {
+  const canvasRef = useRef()
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || !vals.length) return
+    const ctx = canvas.getContext('2d')
+    const total = vals.reduce((a,v) => a+v, 0)
+    const cx = 60, cy = 60, r = 50, inner = 34
+    ctx.clearRect(0, 0, 120, 120)
+    let start = -Math.PI/2
+    vals.forEach((v, i) => {
+      const slice = (v/total) * Math.PI * 2
+      ctx.beginPath()
+      ctx.moveTo(cx, cy)
+      ctx.arc(cx, cy, r, start, start+slice)
+      ctx.closePath()
+      ctx.fillStyle = colors[i]
+      ctx.fill()
+      start += slice
+    })
+    ctx.beginPath()
+    ctx.arc(cx, cy, inner, 0, Math.PI*2)
+    ctx.fillStyle = '#fff'
+    ctx.fill()
+  }, [vals, colors])
+  return <canvas ref={canvasRef} width={120} height={120} />
+}
 
 const TODAY = new Date().toISOString().slice(0, 10)
 const avColors = ['list-av-red','list-av-green','list-av-blue','list-av-yellow']
@@ -573,7 +598,7 @@ function OwnerExpenses({ toast, refresh, branch }) {
         <div className="card">
           <div className="donut-wrap">
             <div style={{ width:120, height:120, flexShrink:0 }}>
-              <Doughnut data={{ labels, datasets:[{ data:vals, backgroundColor:colors, borderWidth:0 }] }} options={{ responsive:true, plugins:{ legend:{ display:false } }, cutout:'68%' }} />
+              <DonutChart labels={labels} vals={vals} colors={colors} />
             </div>
             <div className="donut-legend">
               {labels.map((l,i) => (
@@ -614,7 +639,10 @@ function StaffSubs({ toast, refresh, branch }) {
   const [filter, setFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(false)
+  const [renewModal, setRenewModal] = useState(false)
+  const [renewSub, setRenewSub] = useState(null)
   const [form, setForm] = useState({ name:'', type:'individual', pkg:300, familyCount:2, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:'' })
+  const [renewForm, setRenewForm] = useState({ pkg:300, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:'' })
   const [submitting, setSubmitting] = useState(false)
 
   async function load() {
@@ -651,6 +679,26 @@ function StaffSubs({ toast, refresh, branch }) {
     setModal(false)
     setForm({ name:'', type:'individual', pkg:300, familyCount:2, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:calcEnd(TODAY,300) })
     load()
+  }
+
+  async function renew() {
+    if (!renewSub) return
+    if (renewForm.payment !== 'نقدي' && !renewForm.receiptUrl) { alert('يجب رفع الإيصال'); return }
+    setSubmitting(true)
+    const { error } = await supabase.from('subscribers').update({
+      package: renewForm.pkg,
+      sub_amount: renewForm.pkg,
+      total_amount: renewForm.pkg + Number(renewSub.bus_amount||0) + Number(renewSub.kit_amount||0),
+      payment_method: renewForm.payment,
+      has_receipt: renewForm.payment !== 'نقدي',
+      receipt_url: renewForm.receiptUrl || null,
+      start_date: renewForm.startDate,
+      end_date: renewForm.endDate,
+    }).eq('id', renewSub.id)
+    setSubmitting(false)
+    if (error) { toast('خطأ في التجديد','error'); return }
+    toast('✅ تم تجديد الاشتراك بنجاح','success')
+    setRenewModal(false); setRenewSub(null); load()
   }
 
   const expiringSoon = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d !== null && d >= 0 && d <= 7 })
@@ -696,7 +744,13 @@ function StaffSubs({ toast, refresh, branch }) {
                 </div>
                 <div className="list-right">
                   <div className="list-amt">{fmt(s.total_amount||s.sub_amount)} ر</div>
-                  <span className={`badge ${st.cls}`} style={{ fontSize:9, marginTop:3 }}>{st.label}</span>
+                  <div style={{ display:'flex', gap:4, marginTop:3 }}>
+                    <span className={`badge ${st.cls}`} style={{ fontSize:9 }}>{st.label}</span>
+                    {(st.cls === 'badge-r' || st.cls === 'badge-o') && (
+                      <button onClick={() => { setRenewSub(s); setRenewForm({ pkg:300, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:calcEnd(TODAY,300) }); setRenewModal(true) }}
+                        style={{ fontSize:9, background:'var(--green-l)', border:'1px solid var(--green)', borderRadius:5, padding:'2px 6px', color:'var(--green)', cursor:'pointer', fontFamily:'inherit' }}>تجديد</button>
+                    )}
+                  </div>
                 </div>
               </div>
             )
@@ -704,6 +758,27 @@ function StaffSubs({ toast, refresh, branch }) {
         {filtered.length > 50 && <div className="empty">+{filtered.length-50} آخرين</div>}
       </div>
       <button className="fab" onClick={() => setModal(true)}>👤</button>
+
+      <Modal open={renewModal} onClose={() => setRenewModal(false)} title={`تجديد: ${renewSub?.name||''}`}>
+        <div className="form-group">
+          <label className="form-label">الباقة الجديدة</label>
+          <div className="pkg-grid">
+            {[{v:300,l:'اشتراك فقط\n300 ر'},{v:400,l:'اشتراك + طقم\n400 ر'},{v:450,l:'اشتراك + باص\n450 ر'},{v:550,l:'اشتراك + طقم + باص\n550 ر'},{v:900,l:'3 أشهر\n900 ر'},{v:700,l:'3 أشهر مخفض\n700 ر'}].map(p => (
+              <button key={p.v} className={`pkg-btn ${renewForm.pkg===p.v?'pkg-selected':''}`} onClick={() => setRenewForm(f=>({...f,pkg:p.v,endDate:calcEnd(f.startDate,p.v)}))} style={{ whiteSpace:'pre-line' }}>{p.l}</button>
+            ))}
+          </div>
+        </div>
+        <div className="form-row">
+          <div className="form-group"><label className="form-label">تاريخ البداية</label><input className="form-input" type="date" value={renewForm.startDate} onChange={e => setRenewForm(f=>({...f,startDate:e.target.value,endDate:calcEnd(e.target.value,f.pkg)}))}/></div>
+          <div className="form-group"><label className="form-label">تاريخ الانتهاء</label><input className="form-input" type="date" value={renewForm.endDate} onChange={e => setRenewForm(f=>({...f,endDate:e.target.value}))}/></div>
+        </div>
+        <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={renewForm.payment} onChange={v => setRenewForm(f=>({...f,payment:v,receiptUrl:''}))}/></div>
+        {renewForm.payment !== 'نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="subscribers" onUploaded={url => setRenewForm(f=>({...f,receiptUrl:url}))}/>}
+        <div className="form-group"><label className="form-label">الإجمالي</label><input className="form-input" readOnly value={fmt(renewForm.pkg)+' ر'} style={{ fontWeight:700, color:'var(--green)' }}/></div>
+        <button className="btn-primary" disabled={submitting} onClick={renew} style={{ background:'var(--green)' }}>{submitting?'جاري التجديد...':'تجديد الاشتراك ✓'}</button>
+        <button className="btn-secondary" onClick={() => setRenewModal(false)}>إلغاء</button>
+      </Modal>
+
       <Modal open={modal} onClose={() => setModal(false)} title="إضافة مشترك جديد">
         <div className="form-group">
           <label className="form-label">نوع الاشتراك</label>
