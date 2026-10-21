@@ -1170,9 +1170,9 @@ function MyExpenses({ role, toast, refresh, branch }) {
 
   return (
     <div className="page">
-      {/* EXPENSE FORM - Sugar Treat style */}
+      {/* EXPENSE FORM - on top */}
       <div className="card" style={{ marginBottom:'.75rem' }}>
-        <div style={{ padding:'.875rem 1rem', borderBottom:'1px solid var(--border)' }}>
+        <div style={{ padding:'.875rem 1rem' }}>
           <div style={{ fontSize:13, fontWeight:700, color:'var(--red)', marginBottom:'.875rem' }}>تسجيل مصروف جديد</div>
           <div className="cat-grid" style={{ marginBottom:'.75rem' }}>
             {[['رواتب','👤'],['كهرباء','⚡'],['إنترنت','🌐'],['ماء فاتورة','🚰'],['مياه مخزون','💧'],['صيانة','🔧'],['محامي','⚖️'],['تأمينات','🛡️'],['باص','🚌'],['قرض','🏦'],['أخرى','📦']].map(([c,ic]) => (
@@ -1190,7 +1190,7 @@ function MyExpenses({ role, toast, refresh, branch }) {
         </div>
       </div>
 
-      {/* TABS */}
+      {/* ARCHIVE SECTION */}
       <div className="month-bar">
         <select className="month-select" value={month} onChange={e => { setMonth(e.target.value); load(e.target.value) }}>
           {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
@@ -1284,7 +1284,9 @@ function FieldsCal({ role, toast, refresh, branch }) {
   const pendingBookings = bookings.filter(b => b.status==='pending')
   const todayBks = approvedBookings.filter(b => b.date===TODAY)
   const todayRev = todayBks.reduce((a,b) => a+Number(b.amount), 0)
-  const monthBks = approvedBookings.filter(b => b.date?.startsWith(TODAY.slice(0,7)))
+  // Show revenue for whichever month is currently displayed in the calendar
+  const calMonthStr = `${calYear}-${String(calMonth+1).padStart(2,'0')}`
+  const monthBks = approvedBookings.filter(b => b.date?.startsWith(calMonthStr))
   const monthRev = monthBks.reduce((a,b) => a+Number(b.amount), 0)
   const selectedBks = selectedDate ? bookings.filter(b => b.date===selectedDate) : []
   const selectedRev = selectedBks.filter(b=>b.status==='approved').reduce((a,b) => a+Number(b.amount), 0)
@@ -1310,8 +1312,8 @@ function FieldsCal({ role, toast, refresh, branch }) {
     <div className="page">
       <div className="summary-strip">
         <div className="strip-item"><div className="strip-label">{selectedDate?'إيراد اليوم المحدد':'إيراد اليوم'}</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(selectedDate?selectedRev:todayRev)} ر</div></div>
-        <div className="strip-item"><div className="strip-label">{selectedDate?'حجوزات المحددة':'حجوزات اليوم'}</div><div className="strip-val">{selectedDate?selectedBks.length:todayBks.length}</div></div>
-        <div className="strip-item"><div className="strip-label">إيراد الشهر</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(monthRev)} ر</div></div>
+        <div className="strip-item"><div className="strip-label">{selectedDate?'حجوزات اليوم المحدد':'حجوزات اليوم'}</div><div className="strip-val">{selectedDate?selectedBks.length:todayBks.length}</div></div>
+        <div className="strip-item"><div className="strip-label">إيراد {monthNames[calMonth]}</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(monthRev)} ر</div></div>
       </div>
 
       {pendingBookings.length>0 && (
