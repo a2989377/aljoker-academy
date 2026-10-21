@@ -30,6 +30,42 @@ function DonutChart({ labels, vals, colors }) {
   return <canvas ref={canvasRef} width={120} height={120} />
 }
 
+// ============ BAR CHART ============
+function BarChart({ labels, vals, color='#CC1F1F', height=120 }) {
+  const canvasRef = useRef()
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || !vals.length) return
+    const ctx = canvas.getContext('2d')
+    const W = canvas.width, H = canvas.height
+    const pad = { top:10, bottom:28, left:8, right:8 }
+    const max = Math.max(...vals, 1)
+    const barW = Math.floor((W - pad.left - pad.right) / vals.length) - 4
+    ctx.clearRect(0, 0, W, H)
+    ctx.fillStyle = '#f4f4f5'
+    ctx.fillRect(0, 0, W, H)
+    vals.forEach((v, i) => {
+      const x = pad.left + i * ((W - pad.left - pad.right) / vals.length) + 2
+      const barH = Math.round((v / max) * (H - pad.top - pad.bottom))
+      const y = H - pad.bottom - barH
+      ctx.fillStyle = color
+      ctx.beginPath()
+      ctx.roundRect ? ctx.roundRect(x, y, barW, barH, 3) : ctx.rect(x, y, barW, barH)
+      ctx.fill()
+      ctx.fillStyle = '#a1a1aa'
+      ctx.font = '9px IBM Plex Sans Arabic, sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText(labels[i], x + barW/2, H - 8)
+      if (v > 0) {
+        ctx.fillStyle = '#52525b'
+        ctx.font = 'bold 8px IBM Plex Sans Arabic, sans-serif'
+        ctx.fillText(v, x + barW/2, y - 3)
+      }
+    })
+  }, [vals, labels, color])
+  return <canvas ref={canvasRef} width={320} height={height} style={{ width:'100%', height:height }} />
+}
+
 // ============ SMALL COMPONENTS ============
 function Toast({ msg, type }) {
   if (!msg) return null
@@ -194,22 +230,32 @@ function LoginPage({ onLogin }) {
 function OwnerDashboard({ toast, refresh, branch }) {
   const [month, setMonth] = useState('2026-10')
   const [stats, setStats] = useState({ pitchRev:0, subRev:0, kitRev:0, otherRev:0, exp:0, bookingCount:0, subsCount:0 })
+  const [lastStats, setLastStats] = useState({ pitchRev:0, subRev:0, kitRev:0, exp:0 })
   const [pending, setPending] = useState([])
   const [archive, setArchive] = useState([])
   const [topSubs, setTopSubs] = useState([])
-  const [busyDays, setBusyDays] = useState([])
+  const [dowData, setDowData] = useState([0,0,0,0,0,0,0])
   const [expiringSoon, setExpiringSoon] = useState([])
+  const [pitchUtil, setPitchUtil] = useState({ rate:0, bookedHours:0, availableHours:0 })
   const [loading, setLoading] = useState(true)
 
   async function load(m) {
     setLoading(true)
     const start = m+'-01', end = monthEnd(m)
 
-    const [bkRes, expRes, subRes, salesRes] = await Promise.all([
+    // Calculate previous month
+    const [py, pm] = m.split('-').map(Number)
+    const prevM = pm === 1 ? `${py-1}-12` : `${py}-${String(pm-1).padStart(2,'0')}`
+    const prevStart = prevM+'-01', prevEnd = monthEnd(prevM)
+
+    const [bkRes, expRes, subRes, salesRes, prevBkRes, prevExpRes, prevSubRes] = await Promise.all([
       supabase.from('bookings').select('*').eq('branch', branch).eq('status','approved').gte('date', start).lte('date', end),
       supabase.from('expenses').select('amount,category').eq('branch', branch).eq('status','approved').gte('date', start).lte('date', end),
       supabase.from('subscribers').select('*').eq('branch', branch).eq('status','approved'),
       supabase.from('sales').select('total,created_at').eq('branch', branch).eq('status','approved').gte('created_at', start+'T00:00:00').lte('created_at', end+'T23:59:59'),
+      supabase.from('bookings').select('amount').eq('branch', branch).eq('status','approved').gte('date', prevStart).lte('date', prevEnd),
+      supabase.from('expenses').select('amount').eq('branch', branch).eq('status','approved').gte('date', prevStart).lte('date', prevEnd),
+      supabase.from('subscribers').select('sub_amount,kit_amount,start_date').eq('branch', branch).eq('status','approved'),
     ])
 
     const bks = bkRes.data||[]
@@ -224,18 +270,33 @@ function OwnerDashboard({ toast, refresh, branch }) {
     const pitchRev = bks.reduce((a,b) => a+Number(b.amount), 0)
     const otherRev = monthSubs.reduce((a,s) => a+Number(s.other_amount||0), 0)
     const exp = exps.reduce((a,e) => a+Number(e.amount), 0)
-
     setStats({ pitchRev, subRev, kitRev, otherRev, exp, bookingCount:bks.length, subsCount:monthSubs.length })
+
+    // Previous month stats for comparison
+    const prevBks = prevBkRes.data||[]
+    const prevExps = prevExpRes.data||[]
+    const prevSubs = prevSubRes.data||[]
+    const prevMonthSubs = prevSubs.filter(s => s.start_date && s.start_date.startsWith(prevM))
+    const prevPitchRev = prevBks.reduce((a,b) => a+Number(b.amount), 0)
+    const prevSubRev = prevMonthSubs.reduce((a,s) => a+Number(s.sub_amount||0), 0)
+    const prevKitRev = prevMonthSubs.reduce((a,s) => a+Number(s.kit_amount||0), 0)
+    const prevExp = prevExps.reduce((a,e) => a+Number(e.amount), 0)
+    setLastStats({ pitchRev:prevPitchRev, subRev:prevSubRev, kitRev:prevKitRev, exp:prevExp, month:prevM })
 
     // Top subscribers
     const sorted = [...subs].sort((a,b) => Number(b.total_amount||0)-Number(a.total_amount||0)).slice(0,5)
     setTopSubs(sorted)
 
-    // Busiest booking days
-    const dayCount = {}
-    bks.forEach(b => { dayCount[b.date] = (dayCount[b.date]||0)+1 })
-    const busy = Object.entries(dayCount).sort((a,b) => b[1]-a[1]).slice(0,5).map(([date,count]) => ({ date, count, rev: bks.filter(b=>b.date===date).reduce((a,b)=>a+Number(b.amount),0) }))
-    setBusyDays(busy)
+    // Day of week breakdown (0=Sun..6=Sat, display Sat-Sun Arabic style)
+    const dowCount = [0,0,0,0,0,0,0] // Sun Mon Tue Wed Thu Fri Sat
+    bks.forEach(b => { if(b.date) { const d = new Date(b.date).getDay(); dowCount[d]++ } })
+    setDowData(dowCount)
+
+    // Pitch utilization - available hours per month = days * 8 hours / 2hr slots = days * 4 slots * 2 pitches
+    const daysInMonth = new Date(py, pm, 0).getDate()
+    const availableSlots = daysInMonth * 4 * 2 // 4 two-hour slots per night, 2 pitches
+    const bookedSlots = bks.length
+    setPitchUtil({ rate: Math.round((bookedSlots/availableSlots)*100), bookedHours: bookedSlots*2, availableHours: availableSlots*2 })
 
     // Expiring soon
     const soon = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d !== null && d >= 0 && d <= 14 }).slice(0,5)
@@ -381,8 +442,72 @@ function OwnerDashboard({ toast, refresh, branch }) {
         </div>
       )}
 
-      {/* INSIGHTS ROW */}
+      {/* REVENUE COMPARISON */}
+      {lastStats.month && (
+        <div className="card">
+          <div style={{ padding:'.6rem 1rem', borderBottom:'1px solid var(--border)', fontSize:11, fontWeight:600, color:'var(--t3)', textTransform:'uppercase', letterSpacing:'.05em' }}>
+            مقارنة بالشهر السابق ({MONTHS.find(m=>m.value===lastStats.month)?.label||lastStats.month})
+          </div>
+          {[
+            { label:'الملاعب', cur:stats.pitchRev, prev:lastStats.pitchRev, color:'var(--blue)' },
+            { label:'الاشتراكات', cur:stats.subRev, prev:lastStats.subRev, color:'var(--red)' },
+            { label:'المستلزمات', cur:stats.kitRev, prev:lastStats.kitRev, color:'var(--green)' },
+            { label:'المصاريف', cur:stats.exp, prev:lastStats.exp, color:'var(--orange)' },
+          ].map(r => {
+            const diff = r.cur - r.prev
+            const pct = r.prev > 0 ? Math.round((diff/r.prev)*100) : null
+            return (
+              <div key={r.label} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'.6rem 1rem', borderBottom:'1px solid var(--border)' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                  <div style={{ width:3, height:24, background:r.color, borderRadius:2 }}/>
+                  <span style={{ fontSize:12, color:'var(--t2)', fontWeight:500 }}>{r.label}</span>
+                </div>
+                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                  <span style={{ fontSize:11, color:'var(--t3)' }}>{fmt(r.prev)} ر</span>
+                  <span style={{ fontSize:11, color:'var(--t3)' }}>←</span>
+                  <span style={{ fontSize:12, fontWeight:700, color:'var(--t1)' }}>{fmt(r.cur)} ر</span>
+                  {pct !== null && <span style={{ fontSize:10, fontWeight:700, color: diff>=0?'var(--green)':'var(--red)', background: diff>=0?'var(--green-l)':'var(--red-l)', padding:'2px 6px', borderRadius:10 }}>{diff>=0?'+':''}{pct}%</span>}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* PITCH UTILIZATION */}
+      <div className="card">
+        <div style={{ padding:'.6rem 1rem', borderBottom:'1px solid var(--border)', fontSize:11, fontWeight:600, color:'var(--t3)', textTransform:'uppercase', letterSpacing:'.05em' }}>
+          إشغال الملاعب
+        </div>
+        <div style={{ padding:'1rem' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'.5rem' }}>
+            <span style={{ fontSize:13, color:'var(--t2)' }}>{pitchUtil.bookedHours} ساعة محجوزة من أصل {pitchUtil.availableHours}</span>
+            <span style={{ fontSize:18, fontWeight:700, color: pitchUtil.rate>=60?'var(--green)':pitchUtil.rate>=30?'var(--yellow)':'var(--red)' }}>{pitchUtil.rate}%</span>
+          </div>
+          <div style={{ height:8, background:'var(--border)', borderRadius:4, overflow:'hidden' }}>
+            <div style={{ height:'100%', width:pitchUtil.rate+'%', background: pitchUtil.rate>=60?'var(--green)':pitchUtil.rate>=30?'var(--yellow)':'var(--red)', borderRadius:4, transition:'width .5s' }}/>
+          </div>
+          <div style={{ fontSize:10, color:'var(--t3)', marginTop:4 }}>
+            {pitchUtil.rate < 30 ? '⚠️ إشغال منخفض' : pitchUtil.rate < 60 ? '📊 إشغال متوسط' : '✅ إشغال جيد'} · 8 ساعات/ليلة · ملعبين
+          </div>
+        </div>
+      </div>
+
+      {/* DOW CHART + TOP SUBS */}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.75rem', marginBottom:'.75rem' }}>
+        {/* DAY OF WEEK BOOKINGS */}
+        <div className="card" style={{ margin:0 }}>
+          <div style={{ padding:'.6rem .875rem', borderBottom:'1px solid var(--border)', fontSize:11, fontWeight:600, color:'var(--t3)', textTransform:'uppercase', letterSpacing:'.05em' }}>حجوزات/يوم الأسبوع</div>
+          <div style={{ padding:'.75rem .5rem' }}>
+            <BarChart
+              labels={['أح','إث','ثل','أر','خم','جم','سب']}
+              vals={dowData}
+              color='#2563eb'
+              height={100}
+            />
+          </div>
+        </div>
+
         {/* TOP SUBSCRIBERS */}
         <div className="card" style={{ margin:0 }}>
           <div style={{ padding:'.6rem .875rem', borderBottom:'1px solid var(--border)', fontSize:11, fontWeight:600, color:'var(--t3)', textTransform:'uppercase', letterSpacing:'.05em' }}>أعلى اشتراكات</div>
@@ -391,27 +516,9 @@ function OwnerDashboard({ toast, refresh, branch }) {
               <div key={s.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'.5rem .875rem', borderBottom:'1px solid var(--border)' }}>
                 <div style={{ display:'flex', alignItems:'center', gap:6 }}>
                   <span style={{ fontSize:11, fontWeight:700, color:'var(--t3)', width:14 }}>{i+1}</span>
-                  <span style={{ fontSize:12, color:'var(--t1)', fontWeight:500 }}>{s.name.split(' ').slice(0,2).join(' ')}</span>
+                  <span style={{ fontSize:11, color:'var(--t1)', fontWeight:500 }}>{s.name.split(' ').slice(0,2).join(' ')}</span>
                 </div>
                 <span style={{ fontSize:11, fontWeight:700, color:'var(--green)' }}>{fmt(s.total_amount)} ر</span>
-              </div>
-            ))}
-        </div>
-
-        {/* BUSIEST DAYS */}
-        <div className="card" style={{ margin:0 }}>
-          <div style={{ padding:'.6rem .875rem', borderBottom:'1px solid var(--border)', fontSize:11, fontWeight:600, color:'var(--t3)', textTransform:'uppercase', letterSpacing:'.05em' }}>أكثر أيام حجزاً</div>
-          {busyDays.length === 0 ? <div className="empty" style={{ padding:'1rem' }}>لا بيانات</div> :
-            busyDays.map((d,i) => (
-              <div key={d.date} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'.5rem .875rem', borderBottom:'1px solid var(--border)' }}>
-                <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                  <span style={{ fontSize:11, fontWeight:700, color:'var(--t3)', width:14 }}>{i+1}</span>
-                  <div>
-                    <div style={{ fontSize:11, color:'var(--t1)', fontWeight:500 }}>{d.date.slice(5)}</div>
-                    <div style={{ fontSize:10, color:'var(--t3)' }}>{d.count} حجز</div>
-                  </div>
-                </div>
-                <span style={{ fontSize:11, fontWeight:700, color:'var(--blue)' }}>{fmt(d.rev)} ر</span>
               </div>
             ))}
         </div>
@@ -511,6 +618,11 @@ function OwnerAcademy({ toast, refresh, branch }) {
             <div className="kpi"><div className="kpi-label">إجمالي المشتركين</div><div className="kpi-val">{subs.length}</div><div className="kpi-sub">نشط: {subs.length-expired.length}</div></div>
             <div className="kpi"><div className="kpi-label">إيرادات الاشتراكات</div><div className="kpi-val kpi-val-g">{fmt(totalSubRev)} ر</div></div>
             {expiringSoon.length>0 && <div className="kpi kpi-full" style={{ borderColor:'var(--orange)', background:'var(--orange-l)' }}><div className="kpi-label" style={{ color:'var(--orange)' }}>ينتهي قريباً</div><div className="kpi-val" style={{ color:'var(--orange)' }}>{expiringSoon.length} مشترك</div><div className="kpi-sub" style={{ color:'var(--orange)' }}>خلال 7 أيام</div></div>}
+          </div>
+          {/* CATEGORIES PLACEHOLDER */}
+          <div className="info-box info-blue" style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <span style={{ fontSize:16 }}>📂</span>
+            <span>تصنيف الفئات العمرية سيظهر هنا بعد استلام البيانات من مدير الشؤون</span>
           </div>
           <div style={{ display:'flex', gap:'.4rem', overflowX:'auto', marginBottom:'.75rem', scrollbarWidth:'none' }}>
             {[['all','الكل'],['expiring','ينتهي قريباً'],['expired','منتهي'],['bus','الباص'],['kit','اشترى طقم']].map(([v,l]) => (
@@ -859,6 +971,34 @@ function StaffSubs({ toast, refresh, branch }) {
         {pendingSubs.length>0 && <div className="strip-item"><div className="strip-label">معلق</div><div className="strip-val" style={{ color:'var(--orange)' }}>{pendingSubs.length}</div></div>}
         {expiringSoon.length>0 && <div className="strip-item"><div className="strip-label">ينتهي قريباً</div><div className="strip-val" style={{ color:'var(--orange)' }}>{expiringSoon.length}</div></div>}
       </div>
+
+      {/* RENEWAL REMINDERS */}
+      {expiringSoon.length>0 && (
+        <div className="card" style={{ borderColor:'var(--orange)', marginBottom:'.75rem' }}>
+          <div style={{ padding:'.6rem 1rem', borderBottom:'1px solid var(--border)', fontSize:12, fontWeight:700, color:'var(--orange)' }}>
+            ⏰ يحتاجون تجديد قريباً ({expiringSoon.length})
+          </div>
+          {expiringSoon.map(s => {
+            const days = daysBetween(TODAY, s.end_date)
+            return (
+              <div key={s.id} className="list-row">
+                <div className="list-left">
+                  <div className="list-av list-av-yellow">{s.name[0]}</div>
+                  <div>
+                    <div className="list-name">{s.name}</div>
+                    <div className="list-sub">ينتهي {s.end_date}{s.guardian_phone ? ` · 📞 ${s.guardian_phone}` : ''}</div>
+                  </div>
+                </div>
+                <div className="list-right">
+                  <span className={`badge ${days<=3?'badge-r':'badge-o'}`} style={{ fontSize:10 }}>{days} أيام</span>
+                  <button onClick={() => { setRenewSub(s); setRenewForm({ pkg:300, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:calcEnd(TODAY,300) }); setRenewModal(true) }}
+                    style={{ fontSize:10, background:'var(--green-l)', border:'1px solid var(--green)', borderRadius:6, padding:'3px 8px', color:'var(--green)', cursor:'pointer', fontFamily:'inherit', marginTop:3 }}>تجديد</button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       {/* PENDING */}
       {pendingSubs.length>0 && (
