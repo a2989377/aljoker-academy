@@ -1315,7 +1315,7 @@ function MyExpenses({ role, toast, refresh, branch }) {
         <div style={{ padding:'.875rem 1rem' }}>
           <div style={{ fontSize:13, fontWeight:700, color:'var(--red)', marginBottom:'.875rem' }}>تسجيل مصروف جديد</div>
           <div className="cat-grid" style={{ marginBottom:'.75rem' }}>
-            {[['رواتب','👤'],['كهرباء','⚡'],['إنترنت','🌐'],['ماء فاتورة','🚰'],['مياه مخزون','💧'],['صيانة','🔧'],['محامي','⚖️'],['تأمينات','🛡️'],['باص','🚌'],['قرض','🏦'],['أخرى','📦']].map(([c,ic]) => (
+            {[['رواتب','👤'],['كهرباء','⚡'],['إنترنت','🌐'],['ماء فاتورة','🚰'],['مياه مخزون','💧'],['صيانة','🔧'],['محامي','⚖️'],['تأمينات','🛡️'],['قرض','🏦'],['أخرى','📦']].map(([c,ic]) => (
               <button key={c} className={`cat-btn ${form.cat===c?'cat-selected':''}`} onClick={() => setForm(f=>({...f,cat:c}))}>{ic} {c}</button>
             ))}
           </div>
