@@ -1495,7 +1495,7 @@ function FieldsCal({ role, toast, refresh, branch }) {
   const [modal, setModal] = useState(false)
   const [pitch, setPitch] = useState('small')
   const [water, setWater] = useState(false)
-  const [form, setForm] = useState({ name:'', date:TODAY, time:'', payment:'نقدي', receiptUrl:'' })
+  const [form, setForm] = useState({ name:'', phone:'', date:TODAY, time:'', payment:'نقدي', receiptUrl:'' })
   const [submitting, setSubmitting] = useState(false)
 
   async function load() {
@@ -1526,7 +1526,8 @@ function FieldsCal({ role, toast, refresh, branch }) {
     const amount = base+(water?20:0)
     setSubmitting(true)
     const { error } = await supabase.from('bookings').insert({
-      pitch, booker_name:form.name, date:form.date, time:form.time, water, amount,
+      pitch, booker_name:form.name, booker_phone:form.phone||null,
+      date:form.date, time:form.time, water, amount,
       payment_method:form.payment, has_receipt:form.payment!=='نقدي',
       receipt_url:form.receiptUrl||null,
       created_by:ROLES[role]?.label, branch, status:'pending'
@@ -1535,7 +1536,7 @@ function FieldsCal({ role, toast, refresh, branch }) {
     if (error) { toast('خطأ في الحفظ','error'); return }
     toast('✅ تم الإرسال للمالك للموافقة','success')
     setModal(false)
-    setForm({ name:'', date:TODAY, time:'', payment:'نقدي', receiptUrl:'' })
+    setForm({ name:'', phone:'', date:TODAY, time:'', payment:'نقدي', receiptUrl:'' })
     setWater(false); load()
   }
 
@@ -1607,7 +1608,7 @@ function FieldsCal({ role, toast, refresh, branch }) {
                   <div className={`list-av ${b.pitch==='small'?'list-av-blue':'list-av-red'}`}>{b.pitch==='small'?'ص':'ك'}</div>
                   <div>
                     <div className="list-name">{b.booker_name}</div>
-                    <div className="list-sub">{b.pitch==='small'?'ملعب صغير':'ملعب كبير'} · {b.time} · {b.payment_method}{b.water?' · 💧':''}</div>
+                    <div className="list-sub">{b.pitch==='small'?'ملعب صغير':'ملعب كبير'} · {b.time} · {b.payment_method}{b.water?' · 💧':''}{b.booker_phone?` · 📞 ${b.booker_phone}`:''}</div>
                     {b.receipt_url && <a href={b.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
                   </div>
                 </div>
@@ -1629,7 +1630,10 @@ function FieldsCal({ role, toast, refresh, branch }) {
             <div className={`pitch-card ${pitch==='big'?'pitch-selected':''}`} onClick={() => setPitch('big')}><div className="pitch-name">ملعب كبير</div><div className="pitch-price">300 ر</div><div className="pitch-sub">2 ساعات</div></div>
           </div>
         </div>
-        <div className="form-group"><label className="form-label">اسم الحاجز</label><input className="form-input" value={form.name} onChange={e => setForm(f=>({...f,name:e.target.value}))} placeholder="اسم الشخص أو الفريق"/></div>
+        <div className="form-row">
+          <div className="form-group"><label className="form-label">اسم الحاجز</label><input className="form-input" value={form.name} onChange={e => setForm(f=>({...f,name:e.target.value}))} placeholder="الاسم"/></div>
+          <div className="form-group"><label className="form-label">رقم الجوال</label><input className="form-input" type="tel" value={form.phone} onChange={e => setForm(f=>({...f,phone:e.target.value}))} placeholder="05XXXXXXXX"/></div>
+        </div>
         <div className="form-row">
           <div className="form-group"><label className="form-label">التاريخ</label><input className="form-input" type="date" value={form.date} onChange={e => setForm(f=>({...f,date:e.target.value}))}/></div>
           <div className="form-group"><label className="form-label">وقت البداية</label><input className="form-input" type="time" value={form.time} onChange={e => setForm(f=>({...f,time:e.target.value}))}/></div>
