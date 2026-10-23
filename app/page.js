@@ -149,6 +149,16 @@ function Modal({ open, onClose, title, children }) {
   )
 }
 
+function ActionBtns({ onEdit, onDelete, small=false }) {
+  const s = small ? { fontSize:10, padding:'2px 8px', borderRadius:5 } : { fontSize:11, padding:'4px 10px', borderRadius:6 }
+  return (
+    <div style={{ display:'flex', gap:4, marginTop:3 }}>
+      {onEdit && <button onClick={onEdit} style={{ ...s, background:'var(--surface2)', border:'1px solid var(--border)', color:'var(--t2)', cursor:'pointer', fontFamily:'inherit' }}>تعديل</button>}
+      {onDelete && <button onClick={onDelete} style={{ ...s, background:'var(--red-l)', border:'1px solid var(--red-m)', color:'var(--red)', cursor:'pointer', fontFamily:'inherit' }}>حذف</button>}
+    </div>
+  )
+}
+
 function PaymentBtns({ value, onChange }) {
   return (
     <div className="payment-btns">
@@ -681,6 +691,15 @@ function OwnerAcademy({ toast, refresh, branch }) {
                   <div className="store-name">{item.name}</div>
                   <div className="store-price">{item.price} ر</div>
                   <div className="store-stock"><span style={{ color:'var(--green)' }}>متبقي: {item.stock}</span> · <span style={{ color:'var(--t3)' }}>مباع: {item.sold}</span></div>
+                  <button onClick={async () => {
+                    const newStock = prompt(`تعديل مخزون "${item.name}"\nالكمية الحالية: ${item.stock}\n\nأدخل الكمية الجديدة:`, item.stock)
+                    if (newStock === null) return
+                    const n = parseInt(newStock)
+                    if (isNaN(n) || n < 0) { alert('رقم غير صحيح'); return }
+                    await supabase.from('inventory').update({ stock:n }).eq('id', item.id)
+                    const [s, inv] = await Promise.all([supabase.from('subscribers').select('*').eq('branch', branch).eq('status','approved').order('created_at',{ascending:false}), supabase.from('inventory').select('*').order('name')])
+                    setSubs(s.data||[]); setInventory(inv.data||[])
+                  }} style={{ marginTop:6, width:'100%', background:'var(--surface2)', border:'1px solid var(--border)', borderRadius:6, padding:'.3rem', fontSize:11, cursor:'pointer', color:'var(--t2)', fontFamily:'inherit' }}>تعديل المخزون</button>
                 </div>
               </div>
             ))}
@@ -811,7 +830,11 @@ function OwnerFields({ toast, refresh, branch }) {
                         {b.receipt_url && <a href={b.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
                       </div>
                     </div>
-                    <span className={`badge ${b.pitch==='small'?'badge-b':'badge-r'}`}>{fmt(b.amount)} ر</span>
+                    <div className="list-right">
+                      <span className={`badge ${b.pitch==='small'?'badge-b':'badge-r'}`}>{fmt(b.amount)} ر</span>
+                      <button onClick={async () => { if(confirm('هل تريد حذف هذا الحجز؟')) { await supabase.from('bookings').delete().eq('id',b.id); const {data} = await supabase.from('bookings').select('*').eq('branch', branch).eq('status','approved').order('date',{ascending:false}); setBookings(data||[]) } }}
+                        style={{ fontSize:9, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:5, padding:'2px 6px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit', marginTop:3 }}>حذف</button>
+                    </div>
                   </div>
                 ))}
           </div>
@@ -997,6 +1020,9 @@ function StaffSubs({ toast, refresh, branch }) {
   const [modal, setModal] = useState(false)
   const [renewModal, setRenewModal] = useState(false)
   const [renewSub, setRenewSub] = useState(null)
+  const [editModal, setEditModal] = useState(false)
+  const [editSub, setEditSub] = useState(null)
+  const [editForm, setEditForm] = useState({ name:'', phone:'', startDate:'', endDate:'', pkg:300 })
   const [form, setForm] = useState({ name:'', type:'individual', pkg:300, familyCount:2, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:'', phone:'' })
   const [renewForm, setRenewForm] = useState({ pkg:300, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:'' })
   const [submitting, setSubmitting] = useState(false)
@@ -1053,6 +1079,28 @@ function StaffSubs({ toast, refresh, branch }) {
     if (error) { toast('خطأ في التجديد','error'); return }
     toast('✅ تم تجديد الاشتراك بنجاح','success')
     setRenewModal(false); setRenewSub(null); load()
+  }
+
+  async function saveEdit() {
+    if (!editSub) return
+    setSubmitting(true)
+    await supabase.from('subscribers').update({
+      name: editForm.name,
+      guardian_phone: editForm.phone||null,
+      start_date: editForm.startDate||null,
+      end_date: editForm.endDate||null,
+      sub_amount: editForm.pkg,
+      package: editForm.pkg,
+    }).eq('id', editSub.id)
+    setSubmitting(false)
+    toast('✅ تم التعديل بنجاح','success')
+    setEditModal(false); setEditSub(null); load()
+  }
+
+  async function deleteSub(s) {
+    if (!confirm(`هل تريد حذف "${s.name}"؟`)) return
+    await supabase.from('subscribers').delete().eq('id', s.id)
+    toast('تم الحذف','error'); load()
   }
 
   const approvedSubs = subs.filter(s => s.status==='approved')
@@ -1148,12 +1196,16 @@ function StaffSubs({ toast, refresh, branch }) {
                 </div>
                 <div className="list-right">
                   <div className="list-amt">{fmt(s.total_amount||s.sub_amount)} ر</div>
-                  <div style={{ display:'flex', gap:4, marginTop:3 }}>
+                  <div style={{ display:'flex', gap:4, marginTop:3, flexWrap:'wrap', justifyContent:'flex-end' }}>
                     <span className={`badge ${st.cls}`} style={{ fontSize:9 }}>{st.label}</span>
                     {(st.cls==='badge-r'||st.cls==='badge-o') && (
                       <button onClick={() => { setRenewSub(s); setRenewForm({ pkg:300, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:calcEnd(TODAY,300) }); setRenewModal(true) }}
                         style={{ fontSize:9, background:'var(--green-l)', border:'1px solid var(--green)', borderRadius:5, padding:'2px 6px', color:'var(--green)', cursor:'pointer', fontFamily:'inherit' }}>تجديد</button>
                     )}
+                    <button onClick={() => { setEditSub(s); setEditForm({ name:s.name, phone:s.guardian_phone||'', startDate:s.start_date||'', endDate:s.end_date||'', pkg:s.sub_amount||300 }); setEditModal(true) }}
+                      style={{ fontSize:9, background:'var(--surface2)', border:'1px solid var(--border)', borderRadius:5, padding:'2px 6px', color:'var(--t2)', cursor:'pointer', fontFamily:'inherit' }}>تعديل</button>
+                    {s.status==='pending' && <button onClick={() => deleteSub(s)}
+                      style={{ fontSize:9, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:5, padding:'2px 6px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit' }}>حذف</button>}
                   </div>
                 </div>
               </div>
@@ -1183,6 +1235,19 @@ function StaffSubs({ toast, refresh, branch }) {
         <div className="form-group"><label className="form-label">الإجمالي</label><input className="form-input" readOnly value={fmt(renewForm.pkg)+' ر'} style={{ fontWeight:700, color:'var(--green)' }}/></div>
         <button className="btn-primary" disabled={submitting} onClick={renew} style={{ background:'var(--green)' }}>{submitting?'جاري الحفظ...':'تجديد الاشتراك ✓'}</button>
         <button className="btn-secondary" onClick={() => setRenewModal(false)}>إلغاء</button>
+      </Modal>
+
+      {/* EDIT MODAL */}
+      <Modal open={editModal} onClose={() => setEditModal(false)} title={`تعديل: ${editSub?.name||''}`}>
+        <div className="form-group"><label className="form-label">الاسم</label><input className="form-input" value={editForm.name} onChange={e => setEditForm(f=>({...f,name:e.target.value}))}/></div>
+        <div className="form-group"><label className="form-label">رقم ولي الأمر</label><input className="form-input" type="tel" value={editForm.phone} onChange={e => setEditForm(f=>({...f,phone:e.target.value}))} placeholder="05XXXXXXXX"/></div>
+        <div className="form-row">
+          <div className="form-group"><label className="form-label">تاريخ البداية</label><input className="form-input" type="date" value={editForm.startDate} onChange={e => setEditForm(f=>({...f,startDate:e.target.value}))}/></div>
+          <div className="form-group"><label className="form-label">تاريخ الانتهاء</label><input className="form-input" type="date" value={editForm.endDate} onChange={e => setEditForm(f=>({...f,endDate:e.target.value}))}/></div>
+        </div>
+        <div className="form-group"><label className="form-label">مبلغ الاشتراك (ر)</label><input className="form-input" type="number" value={editForm.pkg} onChange={e => setEditForm(f=>({...f,pkg:parseInt(e.target.value)||0}))}/></div>
+        <button className="btn-primary" disabled={submitting} onClick={saveEdit}>{submitting?'جاري الحفظ...':'حفظ التعديلات'}</button>
+        <button className="btn-secondary" onClick={() => setEditModal(false)}>إلغاء</button>
       </Modal>
 
       {/* ADD MODAL */}
@@ -1473,6 +1538,8 @@ function MyExpenses({ role, toast, refresh, branch }) {
                 <div className="approval-desc">{a.description}</div>
                 <div className="approval-meta">{a.date} · {fmt(a.amount)} ر · {a.payment_method}</div>
                 {a.receipt_url && <a href={a.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
+                <button onClick={async () => { if(confirm('هل تريد حذف هذا المصروف؟')) { await supabase.from('expenses').delete().eq('id',a.id); load(month) } }}
+                  style={{ fontSize:10, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:6, padding:'3px 10px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit', marginTop:6, display:'inline-block' }}>حذف</button>
               </div>
             </div>
           ))}
@@ -1639,6 +1706,8 @@ function FieldsCal({ role, toast, refresh, branch }) {
                 <div className="list-right">
                   <span className={`badge ${b.pitch==='small'?'badge-b':'badge-r'}`}>{fmt(b.amount)} ر</span>
                   {b.status==='pending' && <span className="badge badge-o" style={{ fontSize:9, marginTop:3 }}>معلق</span>}
+                  <button onClick={async () => { if(confirm('هل تريد حذف هذا الحجز؟')) { await supabase.from('bookings').delete().eq('id',b.id); load() } }}
+                    style={{ fontSize:9, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:5, padding:'2px 6px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit', marginTop:3 }}>حذف</button>
                 </div>
               </div>
             ))}
