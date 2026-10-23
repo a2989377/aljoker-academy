@@ -206,10 +206,10 @@ function LoginPage({ onLogin }) {
         <label className="login-label">نوع المستخدم</label>
         <select className="login-select" value={role} onChange={e => { setRole(e.target.value); setPin(''); setError(false) }}>
           <option value="owner">المالك</option>
-          <option value="admin_riyadh">مدير الشؤون الإدارية - الرياض</option>
-          <option value="fields_riyadh">مسؤول الملاعب - الرياض</option>
-          <option value="admin_jazan">مدير الشؤون الإدارية - جازان</option>
-          <option value="fields_jazan">مسؤول الملاعب - جازان</option>
+          <option value="admin_riyadh">الإدارة - الرياض</option>
+          <option value="fields_riyadh">الملاعب - الرياض</option>
+          <option value="admin_jazan">الإدارة - جازان</option>
+          <option value="fields_jazan">الملاعب - جازان</option>
         </select>
         <div className="pin-wrap">
           {[0,1,2,3].map(i => <div key={i} className={`pin-dot ${i<pin.length?'pin-filled':''}`}/>)}
