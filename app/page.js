@@ -832,8 +832,8 @@ function OwnerFields({ toast, refresh, branch }) {
                     </div>
                     <div className="list-right">
                       <span className={`badge ${b.pitch==='small'?'badge-b':'badge-r'}`}>{fmt(b.amount)} ر</span>
-                      <button onClick={async () => { if(confirm('هل تريد حذف هذا الحجز؟')) { await supabase.from('bookings').delete().eq('id',b.id); const {data} = await supabase.from('bookings').select('*').eq('branch', branch).eq('status','approved').order('date',{ascending:false}); setBookings(data||[]) } }}
-                        style={{ fontSize:9, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:5, padding:'2px 6px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit', marginTop:3 }}>حذف</button>
+                      {b.status==='pending' && <button onClick={async () => { if(confirm('هل تريد حذف هذا الحجز؟')) { await supabase.from('bookings').delete().eq('id',b.id); const {data} = await supabase.from('bookings').select('*').eq('branch', branch).eq('status','approved').order('date',{ascending:false}); setBookings(data||[]) } }}
+                        style={{ fontSize:9, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:5, padding:'2px 6px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit', marginTop:3 }}>حذف</button>}
                     </div>
                   </div>
                 ))}
@@ -1084,14 +1084,18 @@ function StaffSubs({ toast, refresh, branch }) {
   async function saveEdit() {
     if (!editSub) return
     setSubmitting(true)
-    await supabase.from('subscribers').update({
+    const updateData = {
       name: editForm.name,
       guardian_phone: editForm.phone||null,
       start_date: editForm.startDate||null,
       end_date: editForm.endDate||null,
-      sub_amount: editForm.pkg,
-      package: editForm.pkg,
-    }).eq('id', editSub.id)
+    }
+    // Only update financial fields if still pending
+    if (editSub.status === 'pending') {
+      updateData.sub_amount = editForm.pkg
+      updateData.package = editForm.pkg
+    }
+    await supabase.from('subscribers').update(updateData).eq('id', editSub.id)
     setSubmitting(false)
     toast('✅ تم التعديل بنجاح','success')
     setEditModal(false); setEditSub(null); load()
@@ -1245,7 +1249,13 @@ function StaffSubs({ toast, refresh, branch }) {
           <div className="form-group"><label className="form-label">تاريخ البداية</label><input className="form-input" type="date" value={editForm.startDate} onChange={e => setEditForm(f=>({...f,startDate:e.target.value}))}/></div>
           <div className="form-group"><label className="form-label">تاريخ الانتهاء</label><input className="form-input" type="date" value={editForm.endDate} onChange={e => setEditForm(f=>({...f,endDate:e.target.value}))}/></div>
         </div>
-        <div className="form-group"><label className="form-label">مبلغ الاشتراك (ر)</label><input className="form-input" type="number" value={editForm.pkg} onChange={e => setEditForm(f=>({...f,pkg:parseInt(e.target.value)||0}))}/></div>
+        <div className="form-group">
+          <label className="form-label">مبلغ الاشتراك (ر)</label>
+          {editSub?.status==='approved'
+            ? <input className="form-input" readOnly value={editForm.pkg+' ر (مُعتمد - لا يمكن تعديله)'} style={{ color:'var(--t3)', background:'var(--surface2)' }}/>
+            : <input className="form-input" type="number" value={editForm.pkg} onChange={e => setEditForm(f=>({...f,pkg:parseInt(e.target.value)||0}))}/>
+          }
+        </div>
         <button className="btn-primary" disabled={submitting} onClick={saveEdit}>{submitting?'جاري الحفظ...':'حفظ التعديلات'}</button>
         <button className="btn-secondary" onClick={() => setEditModal(false)}>إلغاء</button>
       </Modal>
@@ -1706,8 +1716,8 @@ function FieldsCal({ role, toast, refresh, branch }) {
                 <div className="list-right">
                   <span className={`badge ${b.pitch==='small'?'badge-b':'badge-r'}`}>{fmt(b.amount)} ر</span>
                   {b.status==='pending' && <span className="badge badge-o" style={{ fontSize:9, marginTop:3 }}>معلق</span>}
-                  <button onClick={async () => { if(confirm('هل تريد حذف هذا الحجز؟')) { await supabase.from('bookings').delete().eq('id',b.id); load() } }}
-                    style={{ fontSize:9, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:5, padding:'2px 6px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit', marginTop:3 }}>حذف</button>
+                  {b.status==='pending' && <button onClick={async () => { if(confirm('هل تريد حذف هذا الحجز؟')) { await supabase.from('bookings').delete().eq('id',b.id); load() } }}
+                    style={{ fontSize:9, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:5, padding:'2px 6px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit', marginTop:3 }}>حذف</button>}
                 </div>
               </div>
             ))}
