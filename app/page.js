@@ -1032,7 +1032,7 @@ function StaffSubs({ toast, refresh, branch }) {
     })
     setSubmitting(false)
     if (error) { toast('خطأ في الحفظ','error'); return }
-    toast('✅ تم الإرسال للمالك للموافقة','success')
+    toast('✅ تم الحفظ بنجاح','success')
     setModal(false)
     setForm({ name:'', type:'individual', pkg:300, familyCount:2, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:calcEnd(TODAY,300), phone:'' })
     load()
@@ -1051,7 +1051,7 @@ function StaffSubs({ toast, refresh, branch }) {
     }).eq('id', renewSub.id)
     setSubmitting(false)
     if (error) { toast('خطأ في التجديد','error'); return }
-    toast('✅ تم إرسال التجديد للمالك للموافقة','success')
+    toast('✅ تم تجديد الاشتراك بنجاح','success')
     setRenewModal(false); setRenewSub(null); load()
   }
 
@@ -1181,8 +1181,7 @@ function StaffSubs({ toast, refresh, branch }) {
         <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={renewForm.payment} onChange={v => setRenewForm(f=>({...f,payment:v,receiptUrl:''}))}/></div>
         {renewForm.payment!=='نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="subscribers" onUploaded={url => setRenewForm(f=>({...f,receiptUrl:url}))}/>}
         <div className="form-group"><label className="form-label">الإجمالي</label><input className="form-input" readOnly value={fmt(renewForm.pkg)+' ر'} style={{ fontWeight:700, color:'var(--green)' }}/></div>
-        <div className="info-box info-yellow">⚠️ سيتم إرسال التجديد للمالك للموافقة</div>
-        <button className="btn-primary" disabled={submitting} onClick={renew} style={{ background:'var(--green)' }}>{submitting?'جاري الإرسال...':'إرسال للموافقة ✓'}</button>
+        <button className="btn-primary" disabled={submitting} onClick={renew} style={{ background:'var(--green)' }}>{submitting?'جاري الحفظ...':'تجديد الاشتراك ✓'}</button>
         <button className="btn-secondary" onClick={() => setRenewModal(false)}>إلغاء</button>
       </Modal>
 
@@ -1212,8 +1211,7 @@ function StaffSubs({ toast, refresh, branch }) {
         <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={form.payment} onChange={v => setForm(f=>({...f,payment:v,receiptUrl:''}))}/></div>
         {form.payment!=='نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="subscribers" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/>}
         <div className="form-group"><label className="form-label">الإجمالي</label><input className="form-input" readOnly value={fmt(form.pkg*(form.type==='family'?form.familyCount:1))+' ر'} style={{ fontWeight:700, color:'var(--red)' }}/></div>
-        <div className="info-box info-yellow">⚠️ سيتم إرسال الاشتراك للمالك للموافقة</div>
-        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الإرسال...':'إرسال للموافقة'}</button>
+        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الحفظ...':'إضافة المشترك'}</button>
         <button className="btn-secondary" onClick={() => setModal(false)}>إلغاء</button>
       </Modal>
     </div>
@@ -1284,6 +1282,13 @@ function StaffInventory({ toast, refresh, branch }) {
   const pendingSales = sales.filter(s => s.status==='pending')
   const monthSales = approvedSales.filter(s => s.created_at?.startsWith(month))
   const monthRevenue = monthSales.reduce((a,s) => a+Number(s.total), 0)
+  const monthUnits = monthSales.reduce((a,s) => a+Number(s.qty||1), 0)
+
+  const INV_ORDER = ['طقم صيفي (جيرسي + شورت)','طقم شتوي','جوارب','حقيبة','حقيبة + جوارب','مياه']
+  const sortedInventory = [...inventory].sort((a,b) => {
+    const ai = INV_ORDER.indexOf(a.name), bi = INV_ORDER.indexOf(b.name)
+    return (ai===-1?99:ai) - (bi===-1?99:bi)
+  })
 
   async function submit() {
     if (!form.price) { alert('أدخل السعر'); return }
@@ -1298,7 +1303,7 @@ function StaffInventory({ toast, refresh, branch }) {
     })
     setSubmitting(false)
     if (error) { toast('خطأ في الحفظ','error'); return }
-    toast('✅ تم الإرسال للمالك للموافقة','success')
+    toast('✅ تم الحفظ بنجاح','success')
     setModal(false); load()
   }
 
@@ -1316,14 +1321,14 @@ function StaffInventory({ toast, refresh, branch }) {
         </select>
       </div>
       <div className="kpi-grid">
-        <div className="kpi"><div className="kpi-label">مبيعات الشهر</div><div className="kpi-val kpi-val-g">{fmt(monthRevenue)} ر</div></div>
-        <div className="kpi"><div className="kpi-label">عدد المبيعات</div><div className="kpi-val">{monthSales.length}</div></div>
+        <div className="kpi"><div className="kpi-label">إيراد الشهر</div><div className="kpi-val kpi-val-g">{fmt(monthRevenue)} ر</div></div>
+        <div className="kpi"><div className="kpi-label">قطع مباعة</div><div className="kpi-val">{monthUnits} قطعة</div></div>
       </div>
       {pendingSales.length>0 && (
         <div className="info-box info-yellow">{pendingSales.length} مبيعات بانتظار موافقة المالك</div>
       )}
       <div className="store-grid">
-        {inventory.map(item => (
+        {sortedInventory.map(item => (
           <div key={item.id} className="store-card">
             <div className="store-icon-wrap">{item.icon||'📦'}</div>
             <div className="store-info">
@@ -1355,12 +1360,12 @@ function StaffInventory({ toast, refresh, branch }) {
             </div>
           ))}
       </div>
-      <button className="fab" onClick={() => { if(inventory.length>0){ setSelectedItem(inventory[0]); setForm({ qty:1, price:inventory[0]?.price||0, payment:'نقدي', receiptUrl:'' }); setModal(true) } }}>🛍️</button>
+      <button className="fab" onClick={() => { if(sortedInventory.length>0){ setSelectedItem(sortedInventory[0]); setForm({ qty:1, price:sortedInventory[0]?.price||0, payment:'نقدي', receiptUrl:'' }); setModal(true) } }}>🛍️</button>
       <Modal open={modal} onClose={() => setModal(false)} title="تسجيل بيع">
         <div className="form-group">
           <label className="form-label">الصنف</label>
           <select className="form-select" value={selectedItem?.name||''} onChange={e => { const item = inventory.find(i=>i.name===e.target.value); setSelectedItem(item); setForm(f=>({...f,price:item?.price||0})) }}>
-            {inventory.map(i => <option key={i.id}>{i.name}</option>)}
+            {sortedInventory.map(i => <option key={i.id}>{i.name}</option>)}
           </select>
         </div>
         <div className="form-row">
@@ -1370,8 +1375,7 @@ function StaffInventory({ toast, refresh, branch }) {
         <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={form.payment} onChange={v => setForm(f=>({...f,payment:v,receiptUrl:''}))}/></div>
         {form.payment!=='نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="sales" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/>}
         <div className="form-group"><label className="form-label">الإجمالي</label><input className="form-input" readOnly value={fmt(form.qty*form.price)+' ر'} style={{ fontWeight:700, color:'var(--red)' }}/></div>
-        <div className="info-box info-yellow">⚠️ سيتم إرسال البيع للمالك للموافقة</div>
-        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الإرسال...':'إرسال للموافقة'}</button>
+        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الحفظ...':'تسجيل البيع'}</button>
         <button className="btn-secondary" onClick={() => setModal(false)}>إلغاء</button>
       </Modal>
     </div>
@@ -1408,7 +1412,7 @@ function MyExpenses({ role, toast, refresh, branch }) {
     })
     setSubmitting(false)
     if (error) { toast('خطأ في الحفظ','error'); return }
-    toast('✅ تم إرسال المصروف للموافقة','success')
+    toast('✅ تم تسجيل المصروف بنجاح','success')
     setModal(false)
     setForm({ cat:'', desc:'', amount:'', date:TODAY, payment:'نقدي', receiptUrl:'' })
     load(month)
@@ -1421,7 +1425,10 @@ function MyExpenses({ role, toast, refresh, branch }) {
         <div style={{ padding:'.875rem 1rem' }}>
           <div style={{ fontSize:13, fontWeight:700, color:'var(--red)', marginBottom:'.875rem' }}>تسجيل مصروف جديد</div>
           <div className="cat-grid" style={{ marginBottom:'.75rem' }}>
-            {[['رواتب','👤'],['كهرباء','⚡'],['إنترنت','🌐'],['ماء فاتورة','🚰'],['مياه مخزون','💧'],['صيانة','🔧'],['محامي','⚖️'],['تأمينات','🛡️'],['قرض','🏦'],['أخرى','📦']].map(([c,ic]) => (
+            {(role==='admin_riyadh'||role==='admin_jazan'
+              ? [['رواتب','👤'],['مياه مخزون','💧'],['محامي','⚖️'],['أخرى','📦']]
+              : [['كهرباء','⚡'],['ماء فاتورة','🚰'],['إنترنت','🌐'],['صيانة','🔧'],['تأمينات','🛡️'],['قرض','🏦'],['أخرى','📦']]
+            ).map(([c,ic]) => (
               <button key={c} className={`cat-btn ${form.cat===c?'cat-selected':''}`} onClick={() => setForm(f=>({...f,cat:c}))}>{ic} {c}</button>
             ))}
           </div>
@@ -1432,7 +1439,7 @@ function MyExpenses({ role, toast, refresh, branch }) {
           </div>
           <PaymentBtns value={form.payment} onChange={v => setForm(f=>({...f,payment:v,receiptUrl:''}))}/>
           {form.payment!=='نقدي' && <div style={{ marginTop:'.75rem' }}><ReceiptUpload label="إرفاق الإيصال" folder="expenses" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/></div>}
-          <button className="btn-primary" style={{ marginTop:'.75rem' }} disabled={submitting} onClick={submit}>{submitting?'جاري الإرسال...':'إرسال للموافقة ⟶'}</button>
+          <button className="btn-primary" style={{ marginTop:'.75rem' }} disabled={submitting} onClick={submit}>{submitting?'جاري الحفظ...':'تسجيل المصروف ⟶'}</button>
         </div>
       </div>
 
@@ -1534,7 +1541,7 @@ function FieldsCal({ role, toast, refresh, branch }) {
     })
     setSubmitting(false)
     if (error) { toast('خطأ في الحفظ','error'); return }
-    toast('✅ تم الإرسال للمالك للموافقة','success')
+    toast('✅ تم الحفظ بنجاح','success')
     setModal(false)
     setForm({ name:'', phone:'', date:TODAY, time:'', payment:'نقدي', receiptUrl:'' })
     setWater(false); load()
