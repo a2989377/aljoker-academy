@@ -1648,8 +1648,7 @@ function FieldsCal({ role, toast, refresh, branch }) {
         <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={form.payment} onChange={v => setForm(f=>({...f,payment:v,receiptUrl:''}))}/></div>
         {form.payment!=='نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="bookings" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/>}
         <div className="form-group"><label className="form-label">الإجمالي</label><input className="form-input" readOnly value={fmt(base+(water?20:0))+' ر'} style={{ fontWeight:700, color:'var(--red)' }}/></div>
-        <div className="info-box info-yellow">⚠️ سيتم إرسال الحجز للمالك للموافقة</div>
-        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الإرسال...':'إرسال للموافقة'}</button>
+        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الحفظ...':'تسجيل الحجز'}</button>
         <button className="btn-secondary" onClick={() => setModal(false)}>إلغاء</button>
       </Modal>
     </div>
