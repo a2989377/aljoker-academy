@@ -869,7 +869,7 @@ function OwnerExpenses({ toast, refresh, branch }) {
 
   async function loadPnl() {
     setLoading(true)
-    const dataMonths = ['2026-06','2026-07','2026-08','2026-09','2026-10']
+    const dataMonths = ['2026-10','2026-09','2026-08','2026-07','2026-06']
     const rows = await Promise.all(dataMonths.map(async m => {
       const start = m+'-01', end = monthEnd(m)
       const [bkRes, exRes, subRes, slRes] = await Promise.all([
