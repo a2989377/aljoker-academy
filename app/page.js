@@ -1268,13 +1268,18 @@ function StaffInventory({ toast, refresh, branch }) {
   const [selectedItem, setSelectedItem] = useState(null)
   const [form, setForm] = useState({ qty:1, price:0, payment:'نقدي', receiptUrl:'' })
   const [submitting, setSubmitting] = useState(false)
+  const [subsKitUnits, setSubsKitUnits] = useState(0)
 
   async function load() {
-    const [inv, s] = await Promise.all([
+    const [inv, s, subsKits] = await Promise.all([
       supabase.from('inventory').select('*').order('name'),
       supabase.from('sales').select('*').eq('branch', branch).order('created_at',{ascending:false}).limit(30),
+      supabase.from('subscribers').select('kit_amount,start_date').eq('branch', branch).eq('status','approved').gt('kit_amount', 0),
     ])
     setInventory(inv.data||[]); setSales(s.data||[])
+    // Calculate kit units from subscribers (each kit = 100 ر)
+    const subsKitUnits = (subsKits.data||[]).reduce((a,s) => a + Math.round(Number(s.kit_amount||0)/100), 0)
+    setSubsKitUnits(subsKitUnits)
   }
   useEffect(() => { load() }, [refresh])
 
@@ -1282,7 +1287,9 @@ function StaffInventory({ toast, refresh, branch }) {
   const pendingSales = sales.filter(s => s.status==='pending')
   const monthSales = approvedSales.filter(s => s.created_at?.startsWith(month))
   const monthRevenue = monthSales.reduce((a,s) => a+Number(s.total), 0)
-  const monthUnits = monthSales.reduce((a,s) => a+Number(s.qty||1), 0)
+  const monthSalesUnits = monthSales.filter(s => s.item !== 'مياه').reduce((a,s) => a+Number(s.qty||1), 0)
+  const waterUnits = monthSales.filter(s => s.item === 'مياه').reduce((a,s) => a+Number(s.qty||1), 0)
+  const monthUnits = monthSalesUnits + subsKitUnits
 
   const INV_ORDER = ['طقم صيفي (جيرسي + شورت)','طقم شتوي','جوارب','حقيبة','حقيبة + جوارب','مياه']
   const sortedInventory = [...inventory].sort((a,b) => {
@@ -1493,6 +1500,16 @@ function MyExpenses({ role, toast, refresh, branch }) {
   )
 }
 
+// ============ WATER STOCK INLINE ============
+function WaterStock({ branch }) {
+  const [stock, setStock] = useState(null)
+  useEffect(() => {
+    supabase.from('inventory').select('stock').eq('name','مياه').single().then(({data}) => setStock(data?.stock??null))
+  }, [])
+  if (stock === null) return null
+  return <span style={{ color: stock <= 5 ? 'var(--red)' : 'var(--green)', fontWeight:600 }}>متبقي: {stock} صندوق</span>
+}
+
 // ============ FIELDS CALENDAR ============
 function FieldsCal({ role, toast, refresh, branch }) {
   const [bookings, setBookings] = useState([])
@@ -1648,7 +1665,7 @@ function FieldsCal({ role, toast, refresh, branch }) {
         <div className="form-group">
           <label className="form-label">إضافات</label>
           <div className="water-toggle" onClick={() => setWater(w=>!w)}>
-            <div className="water-toggle-left"><span style={{ fontSize:20 }}>💧</span><div><div style={{ fontSize:13, fontWeight:500, color:'var(--t1)' }}>صندوق مياه</div><div style={{ fontSize:12, color:'var(--t3)' }}>+20 ر</div></div></div>
+            <div className="water-toggle-left"><span style={{ fontSize:20 }}>💧</span><div><div style={{ fontSize:13, fontWeight:500, color:'var(--t1)' }}>صندوق مياه</div><div style={{ fontSize:12, color:'var(--t3)' }}>+20 ر · <WaterStock branch={branch}/></div></div></div>
             <div className={`toggle-switch ${water?'toggle-on':''}`}/>
           </div>
         </div>
