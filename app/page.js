@@ -298,8 +298,8 @@ function OwnerDashboard({ toast, refresh, branch }) {
     const bookedSlots = bks.length
     setPitchUtil({ rate: Math.round((bookedSlots/availableSlots)*100), bookedHours: bookedSlots*2, availableHours: availableSlots*2 })
 
-    // Expiring soon
-    const soon = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d !== null && d >= 0 && d <= 14 }).slice(0,5)
+    // Expiring soon - next 14 days
+    const soon = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d !== null && d >= 0 && d <= 14 }).sort((a,b) => daysBetween(TODAY,a.end_date)-daysBetween(TODAY,b.end_date))
     setExpiringSoon(soon)
 
     // Pending approvals - all types
@@ -527,8 +527,12 @@ function OwnerDashboard({ toast, refresh, branch }) {
       {/* EXPIRING SOON */}
       {expiringSoon.length > 0 && (
         <div className="card" style={{ borderColor:'var(--orange)' }}>
-          <div style={{ padding:'.6rem 1rem', borderBottom:'1px solid var(--border)', fontSize:11, fontWeight:600, color:'var(--orange)', display:'flex', alignItems:'center', gap:6 }}>
-            ⚠️ اشتراكات تنتهي قريباً ({expiringSoon.length})
+          <div style={{ padding:'.6rem 1rem', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <span style={{ fontSize:11, fontWeight:600, color:'var(--orange)' }}>⚠️ اشتراكات تنتهي قريباً</span>
+            <div style={{ display:'flex', gap:6 }}>
+              <span className="badge badge-r" style={{ fontSize:10 }}>هذا الأسبوع: {expiringSoon.filter(s=>daysBetween(TODAY,s.end_date)<=7).length}</span>
+              <span className="badge badge-o" style={{ fontSize:10 }}>الأسبوع القادم: {expiringSoon.filter(s=>{const d=daysBetween(TODAY,s.end_date);return d>7&&d<=14}).length}</span>
+            </div>
           </div>
           {expiringSoon.map(s => {
             const days = daysBetween(TODAY, s.end_date)
@@ -536,9 +540,12 @@ function OwnerDashboard({ toast, refresh, branch }) {
               <div key={s.id} className="list-row">
                 <div className="list-left">
                   <div className="list-av list-av-yellow">{s.name[0]}</div>
-                  <div><div className="list-name">{s.name}</div><div className="list-sub">ينتهي {s.end_date}</div></div>
+                  <div>
+                    <div className="list-name">{s.name}</div>
+                    <div className="list-sub">ينتهي {s.end_date}{s.guardian_phone?` · 📞 ${s.guardian_phone}`:''}</div>
+                  </div>
                 </div>
-                <span className={`badge ${days<=3?'badge-r':'badge-o'}`} style={{ fontSize:10 }}>{days} أيام</span>
+                <span className={`badge ${days<=3?'badge-r':days<=7?'badge-o':'badge-y'}`} style={{ fontSize:10 }}>{days} أيام</span>
               </div>
             )
           })}
@@ -808,16 +815,50 @@ function OwnerFields({ toast, refresh, branch }) {
                   </div>
                 ))}
           </div>
+
+          {/* BOOKING SEARCH */}
+          <div className="sec">بحث في الحجوزات</div>
+          <BookingSearch bookings={bookings} />
         </>
       )}
     </div>
   )
 }
 
+function BookingSearch({ bookings }) {
+  const [q, setQ] = useState('')
+  const results = q.length > 1 ? bookings.filter(b => b.booker_name?.includes(q)) : []
+  return (
+    <>
+      <div className="search-wrap" style={{ borderRadius:'var(--r) var(--r) 0 0', border:'1px solid var(--border)' }}>
+        <input className="search-input" placeholder="ابحث باسم الحاجز..." value={q} onChange={e => setQ(e.target.value)}/>
+      </div>
+      <div className="card" style={{ borderTop:'none', borderRadius:'0 0 var(--r) var(--r)', marginBottom:'.75rem' }}>
+        {q.length < 2 ? <div className="empty" style={{ padding:'1rem' }}>اكتب اسم الحاجز للبحث</div> :
+          results.length === 0 ? <div className="empty" style={{ padding:'1rem' }}>لا توجد نتائج</div> :
+            results.map(b => (
+              <div key={b.id} className="list-row">
+                <div className="list-left">
+                  <div className={`list-av ${b.pitch==='small'?'list-av-blue':'list-av-red'}`}>{b.pitch==='small'?'ص':'ك'}</div>
+                  <div>
+                    <div className="list-name">{b.booker_name}</div>
+                    <div className="list-sub">{b.date} · {b.time} · {b.pitch==='small'?'ملعب صغير':'ملعب كبير'} · {b.payment_method}</div>
+                  </div>
+                </div>
+                <span className={`badge ${b.pitch==='small'?'badge-b':'badge-r'}`}>{fmt(b.amount)} ر</span>
+              </div>
+            ))}
+      </div>
+    </>
+  )
+}
+
 // ============ OWNER EXPENSES ============
 function OwnerExpenses({ toast, refresh, branch }) {
+  const [tab, setTab] = useState('monthly')
   const [month, setMonth] = useState('2026-09')
   const [expenses, setExpenses] = useState([])
+  const [pnlRows, setPnlRows] = useState([])
   const [loading, setLoading] = useState(true)
 
   async function load(m) {
@@ -825,7 +866,32 @@ function OwnerExpenses({ toast, refresh, branch }) {
     const { data } = await supabase.from('expenses').select('*').eq('branch', branch).eq('status','approved').gte('date', m+'-01').lte('date', monthEnd(m)).order('date',{ascending:false})
     setExpenses(data||[]); setLoading(false)
   }
-  useEffect(() => { load(month) }, [month, refresh, branch])
+
+  async function loadPnl() {
+    setLoading(true)
+    const dataMonths = ['2026-06','2026-07','2026-08','2026-09','2026-10']
+    const rows = await Promise.all(dataMonths.map(async m => {
+      const start = m+'-01', end = monthEnd(m)
+      const [bkRes, exRes, subRes, slRes] = await Promise.all([
+        supabase.from('bookings').select('amount').eq('branch',branch).eq('status','approved').gte('date',start).lte('date',end),
+        supabase.from('expenses').select('amount,category').eq('branch',branch).eq('status','approved').gte('date',start).lte('date',end),
+        supabase.from('subscribers').select('sub_amount,kit_amount,other_amount,start_date').eq('branch',branch).eq('status','approved'),
+        supabase.from('sales').select('total,created_at').eq('branch',branch).eq('status','approved').gte('created_at',start+'T00:00:00').lte('created_at',end+'T23:59:59'),
+      ])
+      const pitchRev = (bkRes.data||[]).reduce((a,b)=>a+Number(b.amount),0)
+      const mSubs = (subRes.data||[]).filter(s=>s.start_date?.startsWith(m))
+      const subRev = mSubs.reduce((a,s)=>a+Number(s.sub_amount||0),0)
+      const kitRev = mSubs.reduce((a,s)=>a+Number(s.kit_amount||0),0)+(slRes.data||[]).reduce((a,s)=>a+Number(s.total),0)
+      const allExp = (exRes.data||[])
+      const operExp = allExp.filter(e=>e.category!=='قرض').reduce((a,e)=>a+Number(e.amount),0)
+      const loanExp = allExp.filter(e=>e.category==='قرض').reduce((a,e)=>a+Number(e.amount),0)
+      const totalRev = pitchRev+subRev+kitRev
+      return { month:m, pitchRev, subRev, kitRev, operExp, loanExp, totalRev, net:totalRev-operExp-loanExp, netExLoan:totalRev-operExp }
+    }))
+    setPnlRows(rows); setLoading(false)
+  }
+
+  useEffect(() => { if(tab==='monthly') load(month); else loadPnl() }, [month, refresh, branch, tab])
 
   const catTotals = {}
   expenses.forEach(e => { catTotals[e.category] = (catTotals[e.category]||0)+Number(e.amount) })
@@ -836,48 +902,88 @@ function OwnerExpenses({ toast, refresh, branch }) {
 
   return (
     <div className="page">
-      <div className="month-bar">
-        <select className="month-select" value={month} onChange={e => setMonth(e.target.value)}>
-          {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-        </select>
+      <div className="inner-tabs">
+        <button className={`inner-tab ${tab==='monthly'?'inner-tab-active':''}`} onClick={() => setTab('monthly')}>المصاريف الشهرية</button>
+        <button className={`inner-tab ${tab==='pnl'?'inner-tab-active':''}`} onClick={() => setTab('pnl')}>ملخص P&L</button>
       </div>
-      <div className="kpi-grid">
-        <div className="kpi kpi-full"><div className="kpi-label">إجمالي المصاريف المعتمدة</div><div className="kpi-val kpi-val-r">{fmt(total)} ر</div></div>
-      </div>
-      {!loading && labels.length>0 && (
-        <div className="card">
-          <div className="donut-wrap">
-            <div style={{ width:120, height:120, flexShrink:0 }}>
-              <DonutChart labels={labels} vals={vals} colors={colors}/>
-            </div>
-            <div className="donut-legend">
-              {labels.map((l,i) => (
-                <div key={l} className="donut-row">
-                  <div className="donut-left"><span className="donut-dot" style={{ background:colors[i] }}/>{l}</div>
-                  <span className="donut-val">{fmt(vals[i])} ر</span>
-                </div>
-              ))}
-            </div>
+
+      {tab==='monthly' && (
+        <>
+          <div className="month-bar">
+            <select className="month-select" value={month} onChange={e => setMonth(e.target.value)}>
+              {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
           </div>
-        </div>
-      )}
-      <div className="sec">تفصيل المصاريف</div>
-      <div className="card">
-        {loading ? <div className="loading">جاري التحميل...</div> : expenses.length===0 ? <div className="empty"><div className="empty-icon">💸</div>لا يوجد مصاريف</div> :
-          expenses.map(e => (
-            <div key={e.id} className="list-row">
-              <div className="list-left">
-                <div className="list-av" style={{ background:(EXP_COLORS[EXP_CATS.indexOf(e.category)]||'#6b7280')+'22', color:EXP_COLORS[EXP_CATS.indexOf(e.category)]||'#6b7280', fontSize:10, fontWeight:700 }}>{e.category[0]}</div>
-                <div>
-                  <div className="list-name">{e.description}</div>
-                  <div className="list-sub">{e.category} · {e.date} · {e.payment_method}</div>
-                  {e.receipt_url && <a href={e.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
+          <div className="kpi-grid">
+            <div className="kpi kpi-full"><div className="kpi-label">إجمالي المصاريف المعتمدة</div><div className="kpi-val kpi-val-r">{fmt(total)} ر</div></div>
+          </div>
+          {!loading && labels.length>0 && (
+            <div className="card">
+              <div className="donut-wrap">
+                <div style={{ width:120, height:120, flexShrink:0 }}>
+                  <DonutChart labels={labels} vals={vals} colors={colors}/>
+                </div>
+                <div className="donut-legend">
+                  {labels.map((l,i) => (
+                    <div key={l} className="donut-row">
+                      <div className="donut-left"><span className="donut-dot" style={{ background:colors[i] }}/>{l}</div>
+                      <span className="donut-val">{fmt(vals[i])} ر</span>
+                    </div>
+                  ))}
                 </div>
               </div>
-              <span className="badge badge-r">{fmt(e.amount)} ر</span>
             </div>
-          ))}
-      </div>
+          )}
+          <div className="sec">تفصيل المصاريف</div>
+          <div className="card">
+            {loading ? <div className="loading">جاري التحميل...</div> : expenses.length===0 ? <div className="empty"><div className="empty-icon">💸</div>لا يوجد مصاريف</div> :
+              expenses.map(e => (
+                <div key={e.id} className="list-row">
+                  <div className="list-left">
+                    <div className="list-av" style={{ background:(EXP_COLORS[EXP_CATS.indexOf(e.category)]||'#6b7280')+'22', color:EXP_COLORS[EXP_CATS.indexOf(e.category)]||'#6b7280', fontSize:10, fontWeight:700 }}>{e.category[0]}</div>
+                    <div>
+                      <div className="list-name">{e.description}</div>
+                      <div className="list-sub">{e.category} · {e.date} · {e.payment_method}</div>
+                      {e.receipt_url && <a href={e.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
+                    </div>
+                  </div>
+                  <span className="badge badge-r">{fmt(e.amount)} ر</span>
+                </div>
+              ))}
+          </div>
+        </>
+      )}
+
+      {tab==='pnl' && (
+        <>
+          <div className="info-box info-blue">الأرقام تعكس الإيرادات والمصاريف الفعلية لكل شهر. القرض مفصول عن المصاريف التشغيلية.</div>
+          {loading ? <div className="loading">جاري التحميل...</div> :
+            pnlRows.map(r => {
+              const mLabel = MONTHS.find(m=>m.value===r.month)?.label||r.month
+              return (
+                <div key={r.month} className="card" style={{ marginBottom:'.75rem' }}>
+                  <div style={{ padding:'.75rem 1rem', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                    <span style={{ fontSize:13, fontWeight:700, color:'var(--t1)' }}>{mLabel}</span>
+                    <div style={{ display:'flex', gap:6 }}>
+                      <span className={`badge ${r.netExLoan>=0?'badge-g':'badge-r'}`} style={{ fontSize:10 }}>بدون قرض: {r.netExLoan>=0?'+':''}{fmt(r.netExLoan)} ر</span>
+                      <span className={`badge ${r.net>=0?'badge-g':'badge-r'}`} style={{ fontSize:10 }}>الصافي: {r.net>=0?'+':''}{fmt(r.net)} ر</span>
+                    </div>
+                  </div>
+                  <div className="pnl-row"><span className="pnl-label">إيراد الملاعب</span><span className="pnl-val" style={{ color:'var(--green)' }}>{fmt(r.pitchRev)} ر</span></div>
+                  <div className="pnl-row"><span className="pnl-label">إيراد الاشتراكات</span><span className="pnl-val" style={{ color:'var(--green)' }}>{fmt(r.subRev)} ر</span></div>
+                  <div className="pnl-row"><span className="pnl-label">المستلزمات</span><span className="pnl-val" style={{ color:'var(--green)' }}>{fmt(r.kitRev)} ر</span></div>
+                  <div className="pnl-row" style={{ background:'var(--surface2)' }}><span className="pnl-label" style={{ fontWeight:600 }}>إجمالي الإيرادات</span><span className="pnl-val" style={{ color:'var(--green)', fontWeight:700 }}>{fmt(r.totalRev)} ر</span></div>
+                  <div className="pnl-row"><span className="pnl-label">المصاريف التشغيلية</span><span className="pnl-val" style={{ color:'var(--red)' }}>{fmt(r.operExp)} ر</span></div>
+                  {r.loanExp > 0 && <div className="pnl-row"><span className="pnl-label">القرض</span><span className="pnl-val" style={{ color:'var(--orange)' }}>{fmt(r.loanExp)} ر</span></div>}
+                  <div className="pnl-row" style={{ background:'var(--black)' }}>
+                    <span style={{ color:'rgba(255,255,255,.7)', fontSize:13, fontWeight:600 }}>صافي الربح</span>
+                    <span style={{ color: r.net>=0?'var(--green)':'var(--red)', fontSize:15, fontWeight:700 }}>{r.net>=0?'+':''}{fmt(r.net)} ر</span>
+                  </div>
+                </div>
+              )
+            })}
+        </>
+      )}
     </div>
   )
 }
@@ -1401,6 +1507,21 @@ function FieldsCal({ role, toast, refresh, branch }) {
   async function submit() {
     if (!form.name.trim()) { alert('أدخل اسم الحاجز'); return }
     if (form.payment!=='نقدي' && !form.receiptUrl) { alert('يجب رفع الإيصال'); return }
+
+    // Conflict check
+    if (form.date && form.time) {
+      const conflict = bookings.find(b =>
+        b.date === form.date &&
+        b.pitch === pitch &&
+        b.time === form.time &&
+        b.status !== 'rejected'
+      )
+      if (conflict) {
+        alert(`⚠️ تعارض في الحجز!\n${pitch==='small'?'الملعب الصغير':'الملعب الكبير'} محجوز بالفعل في ${form.date} الساعة ${form.time} باسم "${conflict.booker_name}".\nاختر وقتاً آخر.`)
+        return
+      }
+    }
+
     const base = pitch==='small'?250:300
     const amount = base+(water?20:0)
     setSubmitting(true)
