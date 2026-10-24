@@ -616,17 +616,53 @@ function OwnerAcademy({ toast, refresh, branch }) {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
   const [loading, setLoading] = useState(true)
+  const [breaks, setBreaks] = useState([])
+  const [breakForm, setBreakForm] = useState({ reason:'', startDate:TODAY, endDate:'' })
+  const [addingBreak, setAddingBreak] = useState(false)
 
   useEffect(() => {
     async function load() {
-      const [s, inv] = await Promise.all([
+      const [s, inv, br] = await Promise.all([
         supabase.from('subscribers').select('*').eq('branch', branch).eq('status','approved').order('created_at',{ascending:false}),
         supabase.from('inventory').select('*').order('name'),
+        supabase.from('academy_breaks').select('*').eq('branch', branch).order('start_date',{ascending:false}),
       ])
-      setSubs(s.data||[]); setInventory(inv.data||[]); setLoading(false)
+      setSubs(s.data||[]); setInventory(inv.data||[]); setBreaks(br.data||[]); setLoading(false)
     }
     load()
   }, [refresh, branch])
+
+  async function addBreak() {
+    if (!breakForm.startDate||!breakForm.endDate||!breakForm.reason) { alert('أكمل جميع الحقول'); return }
+    setAddingBreak(true)
+    const start = new Date(breakForm.startDate), end = new Date(breakForm.endDate)
+    const days = Math.ceil((end-start)/(1000*60*60*24))
+    // Extend all active subscribers end dates by break duration
+    const activeSubs = subs.filter(s => s.end_date && s.end_date >= breakForm.startDate)
+    await Promise.all([
+      supabase.from('academy_breaks').insert({ branch, reason:breakForm.reason, start_date:breakForm.startDate, end_date:breakForm.endDate, created_by:'المالك' }),
+      ...activeSubs.map(s => {
+        const newEnd = new Date(s.end_date)
+        newEnd.setDate(newEnd.getDate()+days)
+        return supabase.from('subscribers').update({ end_date:newEnd.toISOString().slice(0,10) }).eq('id',s.id)
+      })
+    ])
+    toast(`✅ تم تسجيل الإجازة وتمديد ${activeSubs.length} اشتراك بـ ${days} أيام`,'success')
+    setBreakForm({ reason:'', startDate:TODAY, endDate:'' })
+    setAddingBreak(false)
+    const [s2, br2] = await Promise.all([
+      supabase.from('subscribers').select('*').eq('branch', branch).eq('status','approved').order('created_at',{ascending:false}),
+      supabase.from('academy_breaks').select('*').eq('branch', branch).order('start_date',{ascending:false}),
+    ])
+    setSubs(s2.data||[]); setBreaks(br2.data||[])
+  }
+
+  async function deleteBreak(b) {
+    if (!confirm('هل تريد حذف هذه الإجازة؟ لن يتم التراجع عن تمديد الاشتراكات.')) return
+    await supabase.from('academy_breaks').delete().eq('id', b.id)
+    setBreaks(prev => prev.filter(x => x.id !== b.id))
+    toast('تم حذف الإجازة','error')
+  }
 
   const expiringSoon = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d!==null && d>=0 && d<=7 })
   const expired = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d!==null && d<0 })
@@ -647,6 +683,7 @@ function OwnerAcademy({ toast, refresh, branch }) {
       <div className="inner-tabs">
         <button className={`inner-tab ${tab==='subs'?'inner-tab-active':''}`} onClick={() => setTab('subs')}>المشتركون</button>
         <button className={`inner-tab ${tab==='other'?'inner-tab-active':''}`} onClick={() => setTab('other')}>الباص والمستلزمات</button>
+        <button className={`inner-tab ${tab==='breaks'?'inner-tab-active':''}`} onClick={() => setTab('breaks')}>إجازات الأكاديمية</button>
       </div>
 
       {tab==='subs' && (
@@ -690,6 +727,56 @@ function OwnerAcademy({ toast, refresh, branch }) {
                 )
               })}
             {filtered.length>50 && <div className="empty">+{filtered.length-50} آخرين</div>}
+          </div>
+        </>
+      )}
+
+      {tab==='breaks' && (
+        <>
+          <div className="card" style={{ marginBottom:'.75rem' }}>
+            <div style={{ padding:'.875rem 1rem' }}>
+              <div style={{ fontSize:13, fontWeight:700, color:'var(--red)', marginBottom:'.875rem' }}>تسجيل إجازة جديدة</div>
+              <div className="info-box info-blue" style={{ marginBottom:'.75rem' }}>سيتم تمديد اشتراكات جميع المشتركين النشطين تلقائياً بعدد أيام الإجازة.</div>
+              <div className="form-group"><label className="form-label">سبب الإجازة</label>
+                <select className="form-select" value={breakForm.reason} onChange={e => setBreakForm(f=>({...f,reason:e.target.value}))}>
+                  <option value="">اختر السبب</option>
+                  <option>اختبارات مدرسية</option>
+                  <option>عيد الفطر</option>
+                  <option>عيد الأضحى</option>
+                  <option>اليوم الوطني</option>
+                  <option>إجازة رسمية</option>
+                  <option>صيانة</option>
+                  <option>أخرى</option>
+                </select>
+              </div>
+              <div className="form-row">
+                <div className="form-group"><label className="form-label">تاريخ البداية</label><input className="form-input" type="date" value={breakForm.startDate} onChange={e => setBreakForm(f=>({...f,startDate:e.target.value}))}/></div>
+                <div className="form-group"><label className="form-label">تاريخ الانتهاء</label><input className="form-input" type="date" value={breakForm.endDate} onChange={e => setBreakForm(f=>({...f,endDate:e.target.value}))}/></div>
+              </div>
+              {breakForm.startDate&&breakForm.endDate&&<div style={{ fontSize:12, color:'var(--orange)', marginBottom:'.5rem' }}>
+                مدة الإجازة: {Math.ceil((new Date(breakForm.endDate)-new Date(breakForm.startDate))/(1000*60*60*24))} أيام · سيتم تمديد {subs.filter(s=>s.end_date&&s.end_date>=breakForm.startDate).length} اشتراك
+              </div>}
+              <button className="btn-primary" disabled={addingBreak} onClick={addBreak}>{addingBreak?'جاري التسجيل...':'تسجيل الإجازة وتمديد الاشتراكات'}</button>
+            </div>
+          </div>
+          <div className="sec">سجل الإجازات</div>
+          <div className="card">
+            {breaks.length===0?<div className="empty"><div className="empty-icon">📅</div>لا يوجد إجازات مسجلة</div>:
+              breaks.map(b => {
+                const days = Math.ceil((new Date(b.end_date)-new Date(b.start_date))/(1000*60*60*24))
+                return (
+                  <div key={b.id} className="list-row">
+                    <div className="list-left">
+                      <div className="list-av list-av-yellow">🏖</div>
+                      <div>
+                        <div className="list-name">{b.reason}</div>
+                        <div className="list-sub">{b.start_date} → {b.end_date} · {days} أيام</div>
+                      </div>
+                    </div>
+                    <button onClick={() => deleteBreak(b)} style={{ fontSize:10, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:6, padding:'3px 8px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit' }}>حذف</button>
+                  </div>
+                )
+              })}
           </div>
         </>
       )}
@@ -1031,6 +1118,141 @@ function OwnerExpenses({ toast, refresh, branch }) {
   )
 }
 
+// ============ SUB PRICING FORM ============
+function SubPricingForm({ f, setF, DISCOUNTS, BUS_PRICES, calcMonths, calcEnd, calcTotal, applyDiscount }) {
+  const months = f.is700 ? 3 : calcMonths(f.startDate, f.endDate)
+  const subBase = 300 * months
+  const subFinal = f.is700 ? 700 : applyDiscount(subBase, f.subDiscount)
+  const kitFinal = f.includeKit ? applyDiscount(100, f.kitDiscount) : 0
+  const busFinal = f.includeBus ? applyDiscount(f.busPrice * f.busMonths, f.busDiscount) : 0
+  const total = calcTotal(f, months)
+  const totalPaid = Number(f.cashAmt||0)+Number(f.networkAmt||0)+Number(f.transferAmt||0)
+  const remaining = total - totalPaid
+
+  return (
+    <>
+      {/* 700 PACKAGE TOGGLE */}
+      <div className="form-group">
+        <div className="water-toggle" onClick={() => setF(ff=>({...ff,is700:!ff.is700,endDate:!ff.is700?calcEnd(ff.startDate,3):ff.endDate}))}>
+          <div className="water-toggle-left"><span style={{fontSize:18}}>⭐</span><div><div style={{fontSize:13,fontWeight:500,color:'var(--t1)'}}>باقة 700 ر (3 أشهر مخفضة)</div><div style={{fontSize:11,color:'var(--t3)'}}>اشتراك فقط · 3 أشهر · سعر ثابت</div></div></div>
+          <div className={`toggle-switch ${f.is700?'toggle-on':''}`}/>
+        </div>
+      </div>
+
+      {/* DATES */}
+      <div className="form-row">
+        <div className="form-group">
+          <label className="form-label">تاريخ البداية</label>
+          <input className="form-input" type="date" value={f.startDate} onChange={e => setF(ff=>({...ff,startDate:e.target.value,endDate:ff.is700?calcEnd(e.target.value,3):ff.endDate}))}/>
+        </div>
+        <div className="form-group">
+          <label className="form-label">تاريخ الانتهاء</label>
+          <input className="form-input" type="date" value={f.endDate} onChange={e => setF(ff=>({...ff,endDate:e.target.value}))} readOnly={f.is700}/>
+        </div>
+      </div>
+      {!f.is700 && <div style={{fontSize:11,color:'var(--t3)',marginTop:-8,marginBottom:8,textAlign:'center'}}>{months} {months===1?'شهر':'أشهر'}</div>}
+
+      {/* SUBSCRIPTION LINE */}
+      {!f.is700 && (
+        <div style={{background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:8,padding:'.75rem',marginBottom:'.5rem'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+            <span style={{fontSize:12,fontWeight:600,color:'var(--t1)'}}>الاشتراك</span>
+            <span style={{fontSize:12,color:'var(--t3)'}}>300 ر × {months} = {fmt(subBase)} ر</span>
+          </div>
+          <div className="form-row" style={{marginBottom:0}}>
+            <div className="form-group" style={{marginBottom:0}}>
+              <label className="form-label">خصم الاشتراك</label>
+              <select className="form-select" value={f.subDiscount} onChange={e => setF(ff=>({...ff,subDiscount:Number(e.target.value)}))}>
+                {DISCOUNTS.map(d=><option key={d} value={d}>{d===0?'بدون خصم':`${d}% خصم`}</option>)}
+              </select>
+            </div>
+            <div style={{display:'flex',alignItems:'flex-end',paddingBottom:4}}>
+              <span style={{fontSize:14,fontWeight:700,color:'var(--red)'}}>{fmt(subFinal)} ر</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* KIT LINE */}
+      <div style={{background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:8,padding:'.75rem',marginBottom:'.5rem'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:f.includeKit?8:0}}>
+          <div className="water-toggle-left" onClick={() => setF(ff=>({...ff,includeKit:!ff.includeKit}))} style={{cursor:'pointer'}}>
+            <span style={{fontSize:16}}>👕</span>
+            <span style={{fontSize:12,fontWeight:500,color:'var(--t1)'}}>طقم (جيرسي + شورت) · 100 ر</span>
+          </div>
+          <div className={`toggle-switch ${f.includeKit?'toggle-on':''}`} onClick={() => setF(ff=>({...ff,includeKit:!ff.includeKit}))}/>
+        </div>
+        {f.includeKit && (
+          <div className="form-row" style={{marginBottom:0,marginTop:6}}>
+            <div className="form-group" style={{marginBottom:0}}>
+              <select className="form-select" value={f.kitDiscount} onChange={e => setF(ff=>({...ff,kitDiscount:Number(e.target.value)}))}>
+                {DISCOUNTS.map(d=><option key={d} value={d}>{d===0?'بدون خصم':`${d}% خصم`}</option>)}
+              </select>
+            </div>
+            <div style={{display:'flex',alignItems:'center',paddingBottom:4}}>
+              <span style={{fontSize:14,fontWeight:700,color:'var(--green)'}}>{fmt(kitFinal)} ر</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* BUS LINE */}
+      <div style={{background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:8,padding:'.75rem',marginBottom:'.75rem'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:f.includeBus?8:0}}>
+          <div className="water-toggle-left" onClick={() => setF(ff=>({...ff,includeBus:!ff.includeBus}))} style={{cursor:'pointer'}}>
+            <span style={{fontSize:16}}>🚌</span>
+            <span style={{fontSize:12,fontWeight:500,color:'var(--t1)'}}>باص</span>
+          </div>
+          <div className={`toggle-switch ${f.includeBus?'toggle-on':''}`} onClick={() => setF(ff=>({...ff,includeBus:!ff.includeBus}))}/>
+        </div>
+        {f.includeBus && (
+          <>
+            <div className="form-row" style={{marginBottom:6,marginTop:6}}>
+              <div className="form-group" style={{marginBottom:0}}>
+                <label className="form-label">سعر الباص/شهر</label>
+                <select className="form-select" value={f.busPrice} onChange={e => setF(ff=>({...ff,busPrice:Number(e.target.value)}))}>
+                  {BUS_PRICES.map(p=><option key={p} value={p}>{p} ر</option>)}
+                </select>
+              </div>
+              <div className="form-group" style={{marginBottom:0}}>
+                <label className="form-label">عدد الأشهر</label>
+                <input className="form-input" type="number" min="1" max="12" value={f.busMonths} onChange={e => setF(ff=>({...ff,busMonths:parseInt(e.target.value)||1}))}/>
+              </div>
+            </div>
+            <div className="form-row" style={{marginBottom:0}}>
+              <div className="form-group" style={{marginBottom:0}}>
+                <label className="form-label">خصم الباص</label>
+                <select className="form-select" value={f.busDiscount} onChange={e => setF(ff=>({...ff,busDiscount:Number(e.target.value)}))}>
+                  {DISCOUNTS.map(d=><option key={d} value={d}>{d===0?'بدون خصم':`${d}% خصم`}</option>)}
+                </select>
+              </div>
+              <div style={{display:'flex',alignItems:'flex-end',paddingBottom:4}}>
+                <span style={{fontSize:14,fontWeight:700,color:'#0369a1'}}>{fmt(busFinal)} ر</span>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* SPLIT PAYMENT */}
+      <div style={{background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:8,padding:'.75rem',marginBottom:'.75rem'}}>
+        <div style={{fontSize:12,fontWeight:600,color:'var(--t1)',marginBottom:8}}>تفصيل الدفع</div>
+        <div className="form-row" style={{marginBottom:6}}>
+          <div className="form-group" style={{marginBottom:0}}><label className="form-label">💵 نقدي</label><input className="form-input" type="number" min="0" value={f.cashAmt||''} placeholder="0" onChange={e => setF(ff=>({...ff,cashAmt:e.target.value}))}/></div>
+          <div className="form-group" style={{marginBottom:0}}><label className="form-label">💳 شبكة</label><input className="form-input" type="number" min="0" value={f.networkAmt||''} placeholder="0" onChange={e => setF(ff=>({...ff,networkAmt:e.target.value}))}/></div>
+          <div className="form-group" style={{marginBottom:0}}><label className="form-label">📱 تحويل</label><input className="form-input" type="number" min="0" value={f.transferAmt||''} placeholder="0" onChange={e => setF(ff=>({...ff,transferAmt:e.target.value}))}/></div>
+        </div>
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginTop:4}}>
+          <span style={{color:'var(--t3)'}}>المدفوع: {fmt(totalPaid)} ر</span>
+          <span style={{color:remaining<=0?'var(--green)':'var(--red)',fontWeight:600}}>
+            {remaining<=0?'✅ مكتمل':`متبقي: ${fmt(remaining)} ر`}
+          </span>
+        </div>
+      </div>
+    </>
+  )
+}
+
 // ============ STAFF SUBS ============
 function StaffSubs({ toast, refresh, branch }) {
   const [subs, setSubs] = useState([])
@@ -1043,8 +1265,22 @@ function StaffSubs({ toast, refresh, branch }) {
   const [editModal, setEditModal] = useState(false)
   const [editSub, setEditSub] = useState(null)
   const [editForm, setEditForm] = useState({ name:'', phone:'', startDate:'', endDate:'', pkg:300 })
-  const [form, setForm] = useState({ name:'', type:'individual', pkg:300, familyCount:2, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:'', phone:'' })
-  const [renewForm, setRenewForm] = useState({ pkg:300, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:'' })
+  const DISCOUNTS = [0,10,15,20,30,50]
+  const BUS_PRICES = [150,200,250,300,350,400,450,500,550,600,650,700,750]
+  const emptyForm = { name:'', type:'individual', phone:'',
+    startDate:TODAY, endDate:'',
+    subDiscount:0, includeKit:false, kitDiscount:0,
+    includeBus:false, busPrice:150, busMonths:1,
+    busDiscount:0, busStartDate:TODAY,
+    is700:false,
+    cashAmt:0, networkAmt:0, transferAmt:0,
+    receiptUrl:''
+  }
+  const [form, setForm] = useState(emptyForm)
+  const [renewForm, setRenewForm] = useState({ startDate:TODAY, endDate:'', subDiscount:0, includeKit:false, kitDiscount:0, includeBus:false, busPrice:150, busMonths:1, busDiscount:0, cashAmt:0, networkAmt:0, transferAmt:0, receiptUrl:'', is700:false })
+  const [freezeModal, setFreezeModal] = useState(false)
+  const [freezeSub, setFreezeSub] = useState(null)
+  const [freezeDays, setFreezeDays] = useState(7)
   const [submitting, setSubmitting] = useState(false)
 
   async function load() {
@@ -1053,45 +1289,95 @@ function StaffSubs({ toast, refresh, branch }) {
   }
   useEffect(() => { load() }, [refresh, branch])
 
-  function calcEnd(start, pkg) {
-    if (!start) return ''
+  function calcEnd(start, months) {
+    if (!start || !months) return ''
     const d = new Date(start)
-    d.setMonth(d.getMonth()+(pkg===700||pkg===900?3:1))
+    d.setMonth(d.getMonth()+months)
     return d.toISOString().slice(0,10)
+  }
+
+  function calcMonths(start, end) {
+    if (!start || !end) return 1
+    const s = new Date(start), e = new Date(end)
+    const diff = (e.getFullYear()-s.getFullYear())*12+(e.getMonth()-s.getMonth())
+    return Math.max(1, Math.round(diff))
+  }
+
+  function applyDiscount(price, pct) { return Math.round(price*(1-pct/100)) }
+
+  function calcTotal(f, months) {
+    if (f.is700) return 700
+    const subTotal = applyDiscount(300*months, f.subDiscount)
+    const kitTotal = f.includeKit ? applyDiscount(100, f.kitDiscount) : 0
+    const busTotal = f.includeBus ? applyDiscount(f.busPrice*f.busMonths, f.busDiscount) : 0
+    return subTotal + kitTotal + busTotal
   }
 
   async function submit() {
     if (!form.name.trim()) { alert('أدخل الاسم'); return }
-    if (form.payment!=='نقدي' && !form.receiptUrl) { alert('يجب رفع الإيصال'); return }
+    if (!form.startDate || !form.endDate) { alert('أدخل تاريخ البداية والانتهاء'); return }
+    const months = form.is700 ? 3 : calcMonths(form.startDate, form.endDate)
+    const total = calcTotal(form, months)
+    const subAmt = form.is700 ? 700 : applyDiscount(300*months, form.subDiscount)
+    const kitAmt = form.includeKit ? applyDiscount(100, form.kitDiscount) : 0
+    const busAmt = form.includeBus ? applyDiscount(form.busPrice*form.busMonths, form.busDiscount) : 0
+    const totalPaid = Number(form.cashAmt||0)+Number(form.networkAmt||0)+Number(form.transferAmt||0)
+    const payMethod = form.cashAmt>0&&form.networkAmt===0&&form.transferAmt===0?'نقدي':form.networkAmt>0&&form.cashAmt===0&&form.transferAmt===0?'شبكة':form.transferAmt>0&&form.cashAmt===0&&form.networkAmt===0?'تحويل':'مختلط'
     setSubmitting(true)
-    const count = form.type==='family'?form.familyCount:1
-    const total = form.pkg*count
     const { error } = await supabase.from('subscribers').insert({
-      name:form.name, type:form.type, package:total,
-      sub_amount:total, bus_amount:0, kit_amount:0, other_amount:0, total_amount:total,
-      payment_method:form.payment, has_receipt:form.payment!=='نقدي',
-      receipt_url:form.receiptUrl||null, has_bus:false, has_kit:false,
-      start_date:form.startDate||null, end_date:form.endDate||null,
+      name:form.name, type:form.type, package:subAmt,
+      sub_amount:subAmt, bus_amount:busAmt, kit_amount:kitAmt, other_amount:0,
+      total_amount:total, months,
+      sub_discount:form.subDiscount, kit_discount:form.kitDiscount, bus_discount:form.busDiscount,
+      payment_method:payMethod, payment_cash:Number(form.cashAmt||0),
+      payment_network:Number(form.networkAmt||0), payment_transfer:Number(form.transferAmt||0),
+      has_receipt:(form.networkAmt>0||form.transferAmt>0),
+      receipt_url:form.receiptUrl||null,
+      has_bus:form.includeBus, has_kit:form.includeKit,
+      bus_price_per_month:form.includeBus?form.busPrice:0,
+      bus_months:form.includeBus?form.busMonths:0,
+      bus_start_date:form.includeBus?form.startDate:null,
+      bus_end_date:form.includeBus?calcEnd(form.startDate,form.busMonths):null,
+      start_date:form.startDate, end_date:form.endDate,
       guardian_phone:form.phone||null,
       created_by:ROLES[branch==='jazan'?'admin_jazan':'admin_riyadh']?.label,
       branch, status:'pending'
     })
     setSubmitting(false)
-    if (error) { toast('خطأ في الحفظ','error'); return }
+    if (error) { toast('خطأ في الحفظ','error'); console.error(error); return }
     toast('✅ تم الحفظ بنجاح','success')
-    setModal(false)
-    setForm({ name:'', type:'individual', pkg:300, familyCount:2, payment:'نقدي', receiptUrl:'', startDate:TODAY, endDate:calcEnd(TODAY,300), phone:'' })
-    load()
+    setModal(false); setForm(emptyForm); load()
+  }
+
+  async function freezeSubscriber() {
+    if (!freezeSub || !freezeDays) return
+    const newEnd = new Date(freezeSub.end_date)
+    newEnd.setDate(newEnd.getDate()+Number(freezeDays))
+    await supabase.from('subscribers').update({
+      is_frozen:true, freeze_days:Number(freezeDays),
+      freeze_start:TODAY, end_date:newEnd.toISOString().slice(0,10)
+    }).eq('id', freezeSub.id)
+    toast('✅ تم تجميد الاشتراك وتمديد التاريخ','success')
+    setFreezeModal(false); setFreezeSub(null); load()
   }
 
   async function renew() {
     if (!renewSub) return
-    if (renewForm.payment!=='نقدي' && !renewForm.receiptUrl) { alert('يجب رفع الإيصال'); return }
+    if (!renewForm.startDate||!renewForm.endDate) { alert('أدخل التواريخ'); return }
+    const months = renewForm.is700?3:calcMonths(renewForm.startDate, renewForm.endDate)
+    const subAmt = renewForm.is700?700:applyDiscount(300*months, renewForm.subDiscount)
+    const kitAmt = renewForm.includeKit?applyDiscount(100,renewForm.kitDiscount):0
+    const busAmt = renewForm.includeBus?applyDiscount(renewForm.busPrice*renewForm.busMonths,renewForm.busDiscount):0
+    const total = subAmt+kitAmt+busAmt
+    const payMethod = renewForm.cashAmt>0&&renewForm.networkAmt===0&&renewForm.transferAmt===0?'نقدي':renewForm.networkAmt>0&&renewForm.cashAmt===0&&renewForm.transferAmt===0?'شبكة':renewForm.transferAmt>0&&renewForm.cashAmt===0&&renewForm.networkAmt===0?'تحويل':'مختلط'
     setSubmitting(true)
     const { error } = await supabase.from('subscribers').update({
-      package:renewForm.pkg, sub_amount:renewForm.pkg,
-      total_amount:renewForm.pkg+Number(renewSub.bus_amount||0)+Number(renewSub.kit_amount||0),
-      payment_method:renewForm.payment, has_receipt:renewForm.payment!=='نقدي',
+      package:subAmt, sub_amount:subAmt, kit_amount:kitAmt, bus_amount:busAmt,
+      total_amount:total, months, sub_discount:renewForm.subDiscount,
+      kit_discount:renewForm.kitDiscount, bus_discount:renewForm.busDiscount,
+      payment_method:payMethod, payment_cash:Number(renewForm.cashAmt||0),
+      payment_network:Number(renewForm.networkAmt||0), payment_transfer:Number(renewForm.transferAmt||0),
+      has_kit:renewForm.includeKit, has_bus:renewForm.includeBus,
       receipt_url:renewForm.receiptUrl||null,
       start_date:renewForm.startDate, end_date:renewForm.endDate, status:'pending'
     }).eq('id', renewSub.id)
@@ -1228,6 +1514,9 @@ function StaffSubs({ toast, refresh, branch }) {
                     )}
                     <button onClick={() => { setEditSub(s); setEditForm({ name:s.name, phone:s.guardian_phone||'', startDate:s.start_date||'', endDate:s.end_date||'', pkg:s.sub_amount||300 }); setEditModal(true) }}
                       style={{ fontSize:9, background:'var(--surface2)', border:'1px solid var(--border)', borderRadius:5, padding:'2px 6px', color:'var(--t2)', cursor:'pointer', fontFamily:'inherit' }}>تعديل</button>
+                    {s.status==='approved' && !s.is_frozen && <button onClick={() => { setFreezeSub(s); setFreezeDays(7); setFreezeModal(true) }}
+                      style={{ fontSize:9, background:'#e0f2fe', border:'1px solid #38bdf8', borderRadius:5, padding:'2px 6px', color:'#0369a1', cursor:'pointer', fontFamily:'inherit' }}>تجميد</button>}
+                    {s.is_frozen && <span style={{ fontSize:9, background:'#e0f2fe', border:'1px solid #38bdf8', borderRadius:5, padding:'2px 6px', color:'#0369a1' }}>مجمّد ❄️</span>}
                     {s.status==='pending' && <button onClick={() => deleteSub(s)}
                       style={{ fontSize:9, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:5, padding:'2px 6px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit' }}>حذف</button>}
                   </div>
@@ -1242,23 +1531,23 @@ function StaffSubs({ toast, refresh, branch }) {
 
       {/* RENEW MODAL */}
       <Modal open={renewModal} onClose={() => setRenewModal(false)} title={`تجديد: ${renewSub?.name||''}`}>
-        <div className="form-group">
-          <label className="form-label">الباقة الجديدة</label>
-          <div className="pkg-grid">
-            {[{v:300,l:'اشتراك فقط\n300 ر'},{v:400,l:'اشتراك + طقم\n400 ر'},{v:450,l:'اشتراك + باص\n450 ر'},{v:550,l:'اشتراك + طقم + باص\n550 ر'},{v:900,l:'3 أشهر\n900 ر'},{v:700,l:'3 أشهر مخفض\n700 ر'}].map(p => (
-              <button key={p.v} className={`pkg-btn ${renewForm.pkg===p.v?'pkg-selected':''}`} onClick={() => setRenewForm(f=>({...f,pkg:p.v,endDate:calcEnd(f.startDate,p.v)}))} style={{ whiteSpace:'pre-line' }}>{p.l}</button>
-            ))}
-          </div>
-        </div>
-        <div className="form-row">
-          <div className="form-group"><label className="form-label">تاريخ البداية</label><input className="form-input" type="date" value={renewForm.startDate} onChange={e => setRenewForm(f=>({...f,startDate:e.target.value,endDate:calcEnd(e.target.value,f.pkg)}))}/></div>
-          <div className="form-group"><label className="form-label">تاريخ الانتهاء</label><input className="form-input" type="date" value={renewForm.endDate} onChange={e => setRenewForm(f=>({...f,endDate:e.target.value}))}/></div>
-        </div>
-        <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={renewForm.payment} onChange={v => setRenewForm(f=>({...f,payment:v,receiptUrl:''}))}/></div>
-        {renewForm.payment!=='نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="subscribers" onUploaded={url => setRenewForm(f=>({...f,receiptUrl:url}))}/>}
-        <div className="form-group"><label className="form-label">الإجمالي</label><input className="form-input" readOnly value={fmt(renewForm.pkg)+' ر'} style={{ fontWeight:700, color:'var(--green)' }}/></div>
+        <SubPricingForm f={renewForm} setF={setRenewForm} DISCOUNTS={DISCOUNTS} BUS_PRICES={BUS_PRICES} calcMonths={calcMonths} calcEnd={calcEnd} calcTotal={calcTotal} applyDiscount={applyDiscount}/>
+        <div className="form-group"><label className="form-label">الإجمالي</label><input className="form-input" readOnly value={fmt(calcTotal(renewForm, renewForm.is700?3:calcMonths(renewForm.startDate,renewForm.endDate)))+' ر'} style={{ fontWeight:700, color:'var(--green)' }}/></div>
+        {(renewForm.networkAmt>0||renewForm.transferAmt>0) && <ReceiptUpload label="إرفاق الإيصال" folder="subscribers" onUploaded={url => setRenewForm(f=>({...f,receiptUrl:url}))}/>}
         <button className="btn-primary" disabled={submitting} onClick={renew} style={{ background:'var(--green)' }}>{submitting?'جاري الحفظ...':'تجديد الاشتراك ✓'}</button>
         <button className="btn-secondary" onClick={() => setRenewModal(false)}>إلغاء</button>
+      </Modal>
+
+      {/* FREEZE MODAL */}
+      <Modal open={freezeModal} onClose={() => setFreezeModal(false)} title={`تجميد اشتراك: ${freezeSub?.name||''}`}>
+        <div className="info-box info-blue">سيتم تمديد تاريخ الانتهاء بعدد الأيام المحددة تلقائياً.</div>
+        <div className="form-group">
+          <label className="form-label">عدد أيام التجميد</label>
+          <input className="form-input" type="number" min="1" max="90" value={freezeDays} onChange={e => setFreezeDays(e.target.value)}/>
+          <div className="list-sub" style={{ marginTop:4 }}>تاريخ الانتهاء الجديد: {freezeSub?.end_date ? (() => { const d=new Date(freezeSub.end_date); d.setDate(d.getDate()+Number(freezeDays)); return d.toISOString().slice(0,10) })() : ''}</div>
+        </div>
+        <button className="btn-primary" onClick={freezeSubscriber}>تجميد الاشتراك ❄️</button>
+        <button className="btn-secondary" onClick={() => setFreezeModal(false)}>إلغاء</button>
       </Modal>
 
       {/* EDIT MODAL */}
@@ -1282,30 +1571,19 @@ function StaffSubs({ toast, refresh, branch }) {
 
       {/* ADD MODAL */}
       <Modal open={modal} onClose={() => setModal(false)} title="إضافة مشترك جديد">
+        <div className="form-row">
+          <div className="form-group"><label className="form-label">الاسم</label><input className="form-input" value={form.name} onChange={e => setForm(f=>({...f,name:e.target.value}))} placeholder="اسم المشترك"/></div>
+          <div className="form-group"><label className="form-label">رقم ولي الأمر</label><input className="form-input" type="tel" value={form.phone} onChange={e => setForm(f=>({...f,phone:e.target.value}))} placeholder="05XXXXXXXX"/></div>
+        </div>
         <div className="form-group">
-          <label className="form-label">نوع الاشتراك</label>
+          <label className="form-label">النوع</label>
           <select className="form-select" value={form.type} onChange={e => setForm(f=>({...f,type:e.target.value}))}>
             <option value="individual">فردي</option><option value="family">عائلي</option>
           </select>
         </div>
-        <div className="form-group"><label className="form-label">الاسم</label><input className="form-input" value={form.name} onChange={e => setForm(f=>({...f,name:e.target.value}))} placeholder="اسم المشترك أو العائلة"/></div>
-        {form.type==='family' && <div className="form-group"><label className="form-label">عدد اللاعبين</label><input className="form-input" type="number" min="2" max="10" value={form.familyCount} onChange={e => setForm(f=>({...f,familyCount:parseInt(e.target.value)||2}))}/></div>}
-        <div className="form-group"><label className="form-label">رقم ولي الأمر</label><input className="form-input" type="tel" value={form.phone} onChange={e => setForm(f=>({...f,phone:e.target.value}))} placeholder="05XXXXXXXX"/></div>
-        <div className="form-group">
-          <label className="form-label">الباقة</label>
-          <div className="pkg-grid">
-            {[{v:300,l:'اشتراك فقط\n300 ر'},{v:400,l:'اشتراك + طقم\n400 ر'},{v:450,l:'اشتراك + باص\n450 ر'},{v:550,l:'اشتراك + طقم + باص\n550 ر'},{v:900,l:'3 أشهر\n900 ر'},{v:700,l:'3 أشهر مخفض\n700 ر'}].map(p => (
-              <button key={p.v} className={`pkg-btn ${form.pkg===p.v?'pkg-selected':''}`} onClick={() => setForm(f=>({...f,pkg:p.v,endDate:calcEnd(f.startDate,p.v)}))} style={{ whiteSpace:'pre-line' }}>{p.l}</button>
-            ))}
-          </div>
-        </div>
-        <div className="form-row">
-          <div className="form-group"><label className="form-label">تاريخ البداية</label><input className="form-input" type="date" value={form.startDate} onChange={e => setForm(f=>({...f,startDate:e.target.value,endDate:calcEnd(e.target.value,f.pkg)}))}/></div>
-          <div className="form-group"><label className="form-label">تاريخ الانتهاء</label><input className="form-input" type="date" value={form.endDate} onChange={e => setForm(f=>({...f,endDate:e.target.value}))}/></div>
-        </div>
-        <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={form.payment} onChange={v => setForm(f=>({...f,payment:v,receiptUrl:''}))}/></div>
-        {form.payment!=='نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="subscribers" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/>}
-        <div className="form-group"><label className="form-label">الإجمالي</label><input className="form-input" readOnly value={fmt(form.pkg*(form.type==='family'?form.familyCount:1))+' ر'} style={{ fontWeight:700, color:'var(--red)' }}/></div>
+        <SubPricingForm f={form} setF={setForm} DISCOUNTS={DISCOUNTS} BUS_PRICES={BUS_PRICES} calcMonths={calcMonths} calcEnd={calcEnd} calcTotal={calcTotal} applyDiscount={applyDiscount}/>
+        <div className="form-group"><label className="form-label">الإجمالي</label><input className="form-input" readOnly value={fmt(calcTotal(form, form.is700?3:calcMonths(form.startDate,form.endDate)))+' ر'} style={{ fontWeight:700, color:'var(--red)' }}/></div>
+        {(form.networkAmt>0||form.transferAmt>0) && <ReceiptUpload label="إرفاق الإيصال" folder="subscribers" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/>}
         <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الحفظ...':'إضافة المشترك'}</button>
         <button className="btn-secondary" onClick={() => setModal(false)}>إلغاء</button>
       </Modal>
@@ -1616,7 +1894,7 @@ function FieldsCal({ role, toast, refresh, branch }) {
   const [modal, setModal] = useState(false)
   const [pitch, setPitch] = useState('small')
   const [water, setWater] = useState(false)
-  const [form, setForm] = useState({ name:'', phone:'', date:TODAY, time:'', payment:'نقدي', receiptUrl:'' })
+  const [form, setForm] = useState({ name:'', phone:'', date:TODAY, time:'', cashAmt:0, networkAmt:0, transferAmt:0, deposit:0, depositMethod:'نقدي', receiptUrl:'' })
   const [submitting, setSubmitting] = useState(false)
 
   async function load() {
@@ -1645,19 +1923,29 @@ function FieldsCal({ role, toast, refresh, branch }) {
 
     const base = pitch==='small'?250:300
     const amount = base+(water?20:0)
+    const totalPaid = Number(form.cashAmt||0)+Number(form.networkAmt||0)+Number(form.transferAmt||0)+Number(form.deposit||0)
+    const payMethod = form.cashAmt>0&&form.networkAmt===0&&form.transferAmt===0?'نقدي':form.networkAmt>0&&form.cashAmt===0&&form.transferAmt===0?'شبكة':form.transferAmt>0&&form.cashAmt===0&&form.networkAmt===0?'تحويل':'مختلط'
+    const payStatus = totalPaid>=amount?'مكتمل':totalPaid>0?'جزئي':'غير مدفوع'
+    const splits = []
+    if(form.cashAmt>0) splits.push({method:'نقدي',amount:Number(form.cashAmt)})
+    if(form.networkAmt>0) splits.push({method:'شبكة',amount:Number(form.networkAmt)})
+    if(form.transferAmt>0) splits.push({method:'تحويل',amount:Number(form.transferAmt)})
+    if(form.deposit>0) splits.push({method:form.depositMethod,amount:Number(form.deposit),type:'عربون'})
     setSubmitting(true)
     const { error } = await supabase.from('bookings').insert({
       pitch, booker_name:form.name, booker_phone:form.phone||null,
       date:form.date, time:form.time, water, amount,
-      payment_method:form.payment, has_receipt:form.payment!=='نقدي',
-      receipt_url:form.receiptUrl||null,
+      payment_method:payMethod, has_receipt:(form.networkAmt>0||form.transferAmt>0),
+      receipt_url:form.receiptUrl||null, deposit:Number(form.deposit||0),
+      deposit_method:form.depositMethod, collected:totalPaid,
+      payment_splits:JSON.stringify(splits), payment_status:payStatus,
       created_by:ROLES[role]?.label, branch, status:'pending'
     })
     setSubmitting(false)
     if (error) { toast('خطأ في الحفظ','error'); return }
     toast('✅ تم الحفظ بنجاح','success')
     setModal(false)
-    setForm({ name:'', phone:'', date:TODAY, time:'', payment:'نقدي', receiptUrl:'' })
+    setForm({ name:'', phone:'', date:TODAY, time:'', cashAmt:0, networkAmt:0, transferAmt:0, deposit:0, depositMethod:'نقدي', receiptUrl:'' })
     setWater(false); load()
   }
 
@@ -1728,13 +2016,15 @@ function FieldsCal({ role, toast, refresh, branch }) {
                 <div className="list-left">
                   <div className={`list-av ${b.pitch==='small'?'list-av-blue':'list-av-red'}`}>{b.pitch==='small'?'ص':'ك'}</div>
                   <div>
-                    <div className="list-name">{b.booker_name}</div>
-                    <div className="list-sub">{b.pitch==='small'?'ملعب صغير':'ملعب كبير'} · {b.time} · {b.payment_method}{b.water?' · 💧':''}{b.booker_phone?` · 📞 ${b.booker_phone}`:''}</div>
+                    <div className="list-name">{b.booker_name}{b.booker_phone?` · 📞 ${b.booker_phone}`:''}</div>
+                    <div className="list-sub">{b.pitch==='small'?'ملعب صغير':'ملعب كبير'} · {b.time} · {b.payment_method}{b.water?' · 💧':''}</div>
+                    {b.deposit>0&&<div className="list-sub" style={{color:'var(--orange)'}}>عربون: {fmt(b.deposit)} ر · متبقي: {fmt(b.amount-(b.collected||0))} ر</div>}
                     {b.receipt_url && <a href={b.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
                   </div>
                 </div>
                 <div className="list-right">
                   <span className={`badge ${b.pitch==='small'?'badge-b':'badge-r'}`}>{fmt(b.amount)} ر</span>
+                  {b.payment_status&&b.payment_status!=='مكتمل'&&<span className="badge badge-o" style={{fontSize:9,marginTop:3}}>{b.payment_status}</span>}
                   {b.status==='pending' && <span className="badge badge-o" style={{ fontSize:9, marginTop:3 }}>معلق</span>}
                   {b.status==='pending' && <button onClick={async () => { if(confirm('هل تريد حذف هذا الحجز؟')) { await supabase.from('bookings').delete().eq('id',b.id); load() } }}
                     style={{ fontSize:9, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:5, padding:'2px 6px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit', marginTop:3 }}>حذف</button>}
@@ -1768,9 +2058,28 @@ function FieldsCal({ role, toast, refresh, branch }) {
             <div className={`toggle-switch ${water?'toggle-on':''}`}/>
           </div>
         </div>
-        <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={form.payment} onChange={v => setForm(f=>({...f,payment:v,receiptUrl:''}))}/></div>
-        {form.payment!=='نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="bookings" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/>}
-        <div className="form-group"><label className="form-label">الإجمالي</label><input className="form-input" readOnly value={fmt(base+(water?20:0))+' ر'} style={{ fontWeight:700, color:'var(--red)' }}/></div>
+        <div style={{background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:8,padding:'.75rem',marginBottom:'.75rem'}}>
+          <div style={{fontSize:12,fontWeight:600,color:'var(--t1)',marginBottom:8}}>تفصيل الدفع</div>
+          <div className="form-row" style={{marginBottom:6}}>
+            <div className="form-group" style={{marginBottom:0}}><label className="form-label">💵 نقدي</label><input className="form-input" type="number" min="0" value={form.cashAmt||''} placeholder="0" onChange={e => setForm(f=>({...f,cashAmt:e.target.value}))}/></div>
+            <div className="form-group" style={{marginBottom:0}}><label className="form-label">💳 شبكة</label><input className="form-input" type="number" min="0" value={form.networkAmt||''} placeholder="0" onChange={e => setForm(f=>({...f,networkAmt:e.target.value}))}/></div>
+            <div className="form-group" style={{marginBottom:0}}><label className="form-label">📱 تحويل</label><input className="form-input" type="number" min="0" value={form.transferAmt||''} placeholder="0" onChange={e => setForm(f=>({...f,transferAmt:e.target.value}))}/></div>
+          </div>
+          <div className="form-row" style={{marginBottom:4}}>
+            <div className="form-group" style={{marginBottom:0}}><label className="form-label">عربون</label><input className="form-input" type="number" min="0" value={form.deposit||''} placeholder="0" onChange={e => setForm(f=>({...f,deposit:e.target.value}))}/></div>
+            <div className="form-group" style={{marginBottom:0}}><label className="form-label">طريقة العربون</label><PaymentBtns value={form.depositMethod} onChange={v => setForm(f=>({...f,depositMethod:v}))}/></div>
+          </div>
+          {(() => {
+            const total = base+(water?20:0)
+            const paid = Number(form.cashAmt||0)+Number(form.networkAmt||0)+Number(form.transferAmt||0)+Number(form.deposit||0)
+            const rem = total-paid
+            return <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginTop:4}}>
+              <span style={{color:'var(--t3)'}}>الإجمالي: {fmt(total)} ر · المدفوع: {fmt(paid)} ر</span>
+              <span style={{color:rem<=0?'var(--green)':'var(--red)',fontWeight:600}}>{rem<=0?'✅ مكتمل':`متبقي: ${fmt(rem)} ر`}</span>
+            </div>
+          })()}
+        </div>
+        {(form.networkAmt>0||form.transferAmt>0) && <ReceiptUpload label="إرفاق الإيصال" folder="bookings" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/>}
         <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الحفظ...':'تسجيل الحجز'}</button>
         <button className="btn-secondary" onClick={() => setModal(false)}>إلغاء</button>
       </Modal>
