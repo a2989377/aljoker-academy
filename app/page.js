@@ -248,6 +248,8 @@ function OwnerDashboard({ toast, refresh, branch }) {
   const [expiringSoon, setExpiringSoon] = useState([])
   const [pitchUtil, setPitchUtil] = useState({ rate:0, bookedHours:0, availableHours:0 })
   const [loading, setLoading] = useState(true)
+  const [archiveFilter, setArchiveFilter] = useState('all')
+  const [archiveMonth, setArchiveMonth] = useState('all')
 
   async function load(m) {
     setLoading(true)
@@ -564,10 +566,27 @@ function OwnerDashboard({ toast, refresh, branch }) {
 
       {/* ARCHIVE */}
       <div className="sec">الأرشيف</div>
+      <div style={{ display:'flex', gap:'.4rem', overflowX:'auto', marginBottom:'.5rem', scrollbarWidth:'none' }}>
+        {[['all','الكل'],['subscriber','اشتراكات'],['booking','حجوزات'],['sale','مبيعات'],['expense','مصاريف']].map(([v,l]) => (
+          <button key={v} onClick={() => setArchiveFilter(v)} style={{ flexShrink:0, padding:'5px 12px', borderRadius:20, border:'1.5px solid', borderColor:archiveFilter===v?'var(--red)':'var(--border)', background:archiveFilter===v?'var(--red-l)':'var(--surface)', color:archiveFilter===v?'var(--red)':'var(--t2)', fontSize:12, cursor:'pointer', fontFamily:'inherit', fontWeight:archiveFilter===v?600:400 }}>{l}</button>
+        ))}
+      </div>
+      <div className="month-bar" style={{ marginBottom:'.5rem' }}>
+        <select className="month-select" value={archiveMonth} onChange={e => setArchiveMonth(e.target.value)}>
+          <option value="all">كل الأشهر</option>
+          {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+        </select>
+      </div>
       <div className="card">
-        {loading ? <div className="loading">جاري التحميل...</div> :
-          archive.length === 0 ? <div className="empty"><div className="empty-icon">📁</div>الأرشيف فارغ</div> :
-            archive.map((item,i) => (
+        {loading ? <div className="loading">جاري التحميل...</div> : (() => {
+          let filtered = archive
+          if (archiveFilter !== 'all') filtered = filtered.filter(i => i._type === archiveFilter)
+          if (archiveMonth !== 'all') filtered = filtered.filter(i => {
+            const d = i.date || i.created_at || i.start_date || ''
+            return d.startsWith(archiveMonth)
+          })
+          return filtered.length === 0 ? <div className="empty"><div className="empty-icon">📁</div>لا يوجد سجلات</div> :
+            filtered.map((item,i) => (
               <div key={i} className="list-row">
                 <div className="list-left">
                   <div style={{ fontSize:18, width:36, textAlign:'center', flexShrink:0 }}>{typeIcon[item._type]}</div>
@@ -582,7 +601,8 @@ function OwnerDashboard({ toast, refresh, branch }) {
                   <span style={{ fontSize:9, color:'var(--t3)', marginTop:2 }}>{item.status==='approved'?'معتمد':'مرفوض'}</span>
                 </div>
               </div>
-            ))}
+            ))
+        })()}
       </div>
     </div>
   )
