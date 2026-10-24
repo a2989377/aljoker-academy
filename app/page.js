@@ -1696,6 +1696,7 @@ function StaffBus({ refresh, branch, toast }) {
       bus_end_date: newBusEnd.toISOString().slice(0,10),
       total_amount: Number(extSub.total_amount||0)+discounted,
       payment_method: extForm.payment,
+      receipt_url: extForm.receiptUrl||extSub.receipt_url||null,
     }).eq('id', extSub.id)
     toast('✅ تم تمديد اشتراك الباص','success')
     setExtModal(false); setExtForm({months:1,price:150,discount:0,payment:'نقدي',receiptUrl:''}); load()
