@@ -1674,7 +1674,7 @@ function StaffBus({ refresh, branch, toast }) {
   const [subs, setSubs] = useState([])
   const [extModal, setExtModal] = useState(false)
   const [extSub, setExtSub] = useState(null)
-  const [extForm, setExtForm] = useState({ months:1, price:150, discount:0 })
+  const [extForm, setExtForm] = useState({ months:1, price:150, discount:0, payment:'نقدي', receiptUrl:'' })
   const BUS_PRICES = [150,200,250,300,350,400,450,500,550,600,650,700,750]
   const DISCOUNTS = [0,10,15,20,30,50]
 
@@ -1686,6 +1686,7 @@ function StaffBus({ refresh, branch, toast }) {
 
   async function extendBus() {
     if (!extSub) return
+    if (extForm.payment!=='نقدي'&&!extForm.receiptUrl) { alert('يجب رفع الإيصال'); return }
     const discounted = Math.round(extForm.price*extForm.months*(1-extForm.discount/100))
     const newBusEnd = new Date(extSub.bus_end_date||TODAY)
     newBusEnd.setMonth(newBusEnd.getMonth()+Number(extForm.months))
@@ -1694,9 +1695,10 @@ function StaffBus({ refresh, branch, toast }) {
       bus_months: Number(extSub.bus_months||0)+Number(extForm.months),
       bus_end_date: newBusEnd.toISOString().slice(0,10),
       total_amount: Number(extSub.total_amount||0)+discounted,
+      payment_method: extForm.payment,
     }).eq('id', extSub.id)
     toast('✅ تم تمديد اشتراك الباص','success')
-    setExtModal(false); load()
+    setExtModal(false); setExtForm({months:1,price:150,discount:0,payment:'نقدي',receiptUrl:''}); load()
   }
 
   const busRev = subs.reduce((a,s) => a+Number(s.bus_amount||0), 0)
@@ -1763,6 +1765,8 @@ function StaffBus({ refresh, branch, toast }) {
         <div className="list-sub" style={{ marginBottom:'.75rem' }}>
           تاريخ انتهاء الباص الجديد: {(() => { const d=new Date(extSub?.bus_end_date||TODAY); d.setMonth(d.getMonth()+extForm.months); return d.toISOString().slice(0,10) })()}
         </div>
+        <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={extForm.payment} onChange={v => setExtForm(f=>({...f,payment:v,receiptUrl:''}))}/></div>
+        {extForm.payment!=='نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="subscribers" onUploaded={url => setExtForm(f=>({...f,receiptUrl:url}))}/>}
         <button className="btn-primary" onClick={extendBus}>تمديد اشتراك الباص</button>
         <button className="btn-secondary" onClick={() => setExtModal(false)}>إلغاء</button>
       </Modal>
