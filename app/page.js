@@ -1675,14 +1675,46 @@ function StaffBus({ refresh, branch, toast }) {
   const [extModal, setExtModal] = useState(false)
   const [extSub, setExtSub] = useState(null)
   const [extForm, setExtForm] = useState({ months:1, price:150, discount:0, payment:'نقدي', receiptUrl:'' })
+  const [addBusModal, setAddBusModal] = useState(false)
+  const [allSubs, setAllSubs] = useState([])
+  const [busSearch, setBusSearch] = useState('')
+  const [selectedForBus, setSelectedForBus] = useState(null)
+  const [addBusForm, setAddBusForm] = useState({ price:150, months:1, discount:0, payment:'نقدي', receiptUrl:'' })
   const BUS_PRICES = [150,200,250,300,350,400,450,500,550,600,650,700,750]
   const DISCOUNTS = [0,10,15,20,30,50]
 
   async function load() {
-    const {data} = await supabase.from('subscribers').select('*').eq('branch', branch).eq('has_bus', true).eq('status','approved').order('created_at',{ascending:false})
-    setSubs(data||[])
+    const [bus, all] = await Promise.all([
+      supabase.from('subscribers').select('*').eq('branch', branch).eq('has_bus', true).eq('status','approved').order('created_at',{ascending:false}),
+      supabase.from('subscribers').select('id,name,guardian_phone,has_bus,status').eq('branch', branch).eq('status','approved').eq('has_bus', false).order('name'),
+    ])
+    setSubs(bus.data||[]); setAllSubs(all.data||[])
   }
   useEffect(() => { load() }, [refresh, branch])
+
+  async function addToBus() {
+    if (!selectedForBus) { alert('اختر مشتركاً'); return }
+    if (addBusForm.payment!=='نقدي'&&!addBusForm.receiptUrl) { alert('يجب رفع الإيصال'); return }
+    const discounted = Math.round(addBusForm.price*addBusForm.months*(1-addBusForm.discount/100))
+    const busEnd = new Date(TODAY)
+    busEnd.setMonth(busEnd.getMonth()+Number(addBusForm.months))
+    await supabase.from('subscribers').update({
+      has_bus: true,
+      bus_amount: discounted,
+      bus_price_per_month: addBusForm.price,
+      bus_months: addBusForm.months,
+      bus_start_date: TODAY,
+      bus_end_date: busEnd.toISOString().slice(0,10),
+      total_amount: Number(selectedForBus.total_amount||0)+discounted,
+      receipt_url: addBusForm.receiptUrl||null,
+    }).eq('id', selectedForBus.id)
+    toast('✅ تم إضافة المشترك للباص','success')
+    setAddBusModal(false)
+    setSelectedForBus(null)
+    setBusSearch('')
+    setAddBusForm({ price:150, months:1, discount:0, payment:'نقدي', receiptUrl:'' })
+    load()
+  }
 
   async function extendBus() {
     if (!extSub) return
@@ -1739,6 +1771,75 @@ function StaffBus({ refresh, branch, toast }) {
             </div>
           ))}
       </div>
+
+      <button className="fab" onClick={() => setAddBusModal(true)}>🚌</button>
+
+      {/* ADD TO BUS MODAL */}
+      <Modal open={addBusModal} onClose={() => { setAddBusModal(false); setSelectedForBus(null); setBusSearch('') }} title="إضافة مشترك للباص">
+        {!selectedForBus ? (
+          <>
+            <div className="form-group">
+              <label className="form-label">ابحث عن مشترك</label>
+              <input className="form-input" placeholder="اكتب الاسم..." value={busSearch} onChange={e => setBusSearch(e.target.value)} autoFocus/>
+            </div>
+            <div className="card" style={{ maxHeight:250, overflowY:'auto', margin:0 }}>
+              {allSubs.filter(s => !busSearch || s.name.includes(busSearch)).length === 0
+                ? <div className="empty" style={{ padding:'1rem' }}>لا يوجد مشتركون بدون باص</div>
+                : allSubs.filter(s => !busSearch || s.name.includes(busSearch)).map(s => (
+                  <div key={s.id} className="list-row" style={{ cursor:'pointer' }} onClick={() => setSelectedForBus(s)}>
+                    <div className="list-left">
+                      <div className="list-av list-av-blue">{s.name[0]}</div>
+                      <div>
+                        <div className="list-name">{s.name}</div>
+                        {s.guardian_phone && <div className="list-sub">📞 {s.guardian_phone}</div>}
+                      </div>
+                    </div>
+                    <span style={{ fontSize:11, color:'var(--red)' }}>اختيار ←</span>
+                  </div>
+                ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ background:'var(--green-l)', border:'1px solid var(--green)', borderRadius:8, padding:'.75rem', marginBottom:'.75rem', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div>
+                <div style={{ fontSize:13, fontWeight:600, color:'var(--t1)' }}>{selectedForBus.name}</div>
+                {selectedForBus.guardian_phone && <div style={{ fontSize:11, color:'var(--t3)' }}>📞 {selectedForBus.guardian_phone}</div>}
+              </div>
+              <button onClick={() => setSelectedForBus(null)} style={{ fontSize:11, background:'transparent', border:'none', color:'var(--t3)', cursor:'pointer' }}>تغيير</button>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label className="form-label">سعر الباص/شهر</label>
+                <select className="form-select" value={addBusForm.price} onChange={e => setAddBusForm(f=>({...f,price:Number(e.target.value)}))}>
+                  {BUS_PRICES.map(p=><option key={p} value={p}>{p} ر</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">عدد الأشهر</label>
+                <input className="form-input" type="number" min="1" max="12" value={addBusForm.months} onChange={e => setAddBusForm(f=>({...f,months:parseInt(e.target.value)||1}))}/>
+              </div>
+            </div>
+            <div className="form-group">
+              <label className="form-label">خصم</label>
+              <select className="form-select" value={addBusForm.discount} onChange={e => setAddBusForm(f=>({...f,discount:Number(e.target.value)}))}>
+                {DISCOUNTS.map(d=><option key={d} value={d}>{d===0?'بدون خصم':`${d}%`}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">الإجمالي</label>
+              <input className="form-input" readOnly value={fmt(Math.round(addBusForm.price*addBusForm.months*(1-addBusForm.discount/100)))+' ر'} style={{ fontWeight:700, color:'var(--green)' }}/>
+            </div>
+            <div className="list-sub" style={{ marginBottom:'.75rem' }}>
+              تاريخ انتهاء الباص: {(() => { const d=new Date(TODAY); d.setMonth(d.getMonth()+addBusForm.months); return d.toISOString().slice(0,10) })()}
+            </div>
+            <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={addBusForm.payment} onChange={v => setAddBusForm(f=>({...f,payment:v,receiptUrl:''}))}/></div>
+            {addBusForm.payment!=='نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="subscribers" onUploaded={url => setAddBusForm(f=>({...f,receiptUrl:url}))}/>}
+            <button className="btn-primary" onClick={addToBus}>إضافة للباص</button>
+            <button className="btn-secondary" onClick={() => { setAddBusModal(false); setSelectedForBus(null); setBusSearch('') }}>إلغاء</button>
+          </>
+        )}
+      </Modal>
 
       <Modal open={extModal} onClose={() => setExtModal(false)} title={`تمديد باص: ${extSub?.name||''}`}>
         <div className="form-row">
