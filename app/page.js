@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
-import { supabase, PINS, ROLES, BRANCHES, MONTHS, EXP_CATS, EXP_COLORS, monthEnd, fmt, uploadReceipt, subStatus, daysBetween, PKG3_PRICE, bumpPaid, splitPayment, insertInitialPayments, fetchRevenue } from '../lib/supabase'
+import { supabase, approveRecord, returnRecord, cancelRecord, correctSubscription, subscriptionFlags, addDaysStr, PINS, ROLES, BRANCHES, MONTHS, EXP_CATS, EXP_COLORS, monthEnd, fmt, uploadReceipt, subStatus, daysBetween, PKG3_PRICE, bumpPaid, splitPayment, insertInitialPayments, fetchRevenue } from '../lib/supabase'
 
 const TODAY = new Date().toISOString().slice(0, 10)
 const avColors = ['list-av-red','list-av-green','list-av-blue','list-av-yellow']
@@ -113,7 +113,7 @@ function Banner({ role, onLogout, onRefresh, syncing, branch, setBranch }) {
   )
 }
 
-function BottomNav({ role, active, setActive, pendingCount }) {
+function BottomNav({ role, active, setActive, pendingCount, badges }) {
   const tabs = {
     owner:         [{ id:'dashboard', icon:'📊', label:'داشبورد' }, { id:'academy', icon:'🎓', label:'الأكاديمية' }, { id:'fields', icon:'🏟️', label:'الملاعب' }, { id:'expenses', icon:'💸', label:'المصاريف' }],
     admin_riyadh:  [{ id:'subs', icon:'👥', label:'المشتركون' }, { id:'bus', icon:'🚌', label:'الباص' }, { id:'inventory', icon:'🛍️', label:'المستلزمات' }, { id:'my-expenses', icon:'💸', label:'المصاريف' }],
@@ -128,6 +128,7 @@ function BottomNav({ role, active, setActive, pendingCount }) {
           <span className="nav-icon">{t.icon}</span>
           <span className="nav-label">{t.label}</span>
           {t.id==='dashboard' && pendingCount>0 && <span className="nav-notif">{pendingCount}</span>}
+          {(badges?.[t.id]||0)>0 && <span className="nav-notif">{badges[t.id]}</span>}
         </button>
       ))}
     </nav>
@@ -171,7 +172,7 @@ function PaymentBtns({ value, onChange }) {
   )
 }
 
-function ReceiptUpload({ label, folder, onUploaded }) {
+function ReceiptUpload({ label, folder, onUploaded, current }) {
   const [file, setFile] = useState(null)
   const [uploading, setUploading] = useState(false)
   const inputRef = useRef()
@@ -181,12 +182,13 @@ function ReceiptUpload({ label, folder, onUploaded }) {
     try { const url = await uploadReceipt(f, folder); onUploaded(url) } catch(err) { console.error(err) }
     setUploading(false)
   }
+  const has = !!file || !!current
   return (
     <div className="form-group">
       <label className="form-label">{label} <span style={{ color:'var(--red)' }}>*</span></label>
-      <div className={`receipt-wrap ${file?'receipt-has-file':''}`} onClick={() => inputRef.current?.click()}>
+      <div className={`receipt-wrap ${has?'receipt-has-file':''}`} onClick={() => inputRef.current?.click()}>
         <div className="receipt-icon">📎</div>
-        <div className={`receipt-text ${file?'receipt-text-green':''}`}>{uploading?'جاري الرفع...':file?'✅ '+file.name:'اضغط لرفع الإيصال'}</div>
+        <div className={`receipt-text ${has?'receipt-text-green':''}`}>{uploading?'جاري الرفع...':file?'✅ '+file.name:current?'✅ إيصال محفوظ · اضغط للاستبدال':'اضغط لرفع الإيصال'}</div>
         <input ref={inputRef} type="file" accept="image/*,.pdf" style={{ display:'none' }} onChange={handleChange}/>
       </div>
       <div className="receipt-note">⚠️ الإيصال مطلوب للدفع غير النقدي</div>
@@ -214,13 +216,16 @@ function finalAmount(base, override) {
   return Math.round(Number(base) || 0)
 }
 const blankPricing = {
+  type:'individual', members:1, months:1,
   subOverride:'', includeKit:false, kitOverride:'',
   includeBus:false, busPrice:150, busMonths:1, busOverride:'',
   kitItem:'طقم صيفي (جيرسي + شورت)', kitSize:'', isPkg:false, cashAmt:0, networkAmt:0, transferAmt:0, networkReceipt:'', transferReceipt:''
 }
+function famCount(f) { return f.type === 'family' ? Math.max(1, Number(f.members) || 1) : 1 }
+// the price follows the number of months (and family members), never the typed dates
 function subTotals(f) {
-  const months = f.isPkg ? 3 : calcMonths(f.startDate, f.endDate)
-  const subBase = f.isPkg ? PKG3_PRICE : 300 * months
+  const months = Math.max(1, Number(f.months) || 1)
+  const subBase = (f.isPkg && months === 3 ? PKG3_PRICE : 300 * months) * famCount(f)
   const subFinal = finalAmount(subBase, f.subOverride)
   const kitBase = f.includeKit ? (f.kitItem === 'طقم شتوي' ? 120 : 100) : 0
   const kitFinal = f.includeKit ? finalAmount(kitBase, f.kitOverride) : 0
@@ -231,6 +236,41 @@ function subTotals(f) {
   return { months, subBase, subFinal, kitBase, kitFinal, busBase, busFinal, total, discountGiven: Math.max(0, base - total) }
 }
 function calcTotal(f) { return subTotals(f).total }
+
+// rebuild the add form from a returned subscription so it can be fixed and sent again
+function formFromSub(r, pays) {
+  const members = Number(r.members_count) || 1
+  const months = Number(r.months) || calcMonths(r.start_date, r.end_date)
+  const f = { ...blankPricing, name: r.name, phone: r.guardian_phone || '', type: r.type === 'family' ? 'family' : 'individual', members, months,
+    startDate: r.start_date || TODAY, endDate: r.end_date || calcEnd(r.start_date || TODAY, months),
+    isPkg: months === 3 && Number(r.sub_amount) === PKG3_PRICE * members }
+  f.subOverride = Number(r.sub_amount) !== subTotals(f).subBase ? String(r.sub_amount) : ''
+  if (r.has_kit && r.kit_item) {
+    f.includeKit = true; f.kitItem = r.kit_item; f.kitSize = r.kit_size || ''
+    f.kitOverride = Number(r.kit_amount) !== (r.kit_item === 'طقم شتوي' ? 120 : 100) ? String(r.kit_amount) : ''
+  }
+  if (Number(r.bus_amount) > 0) {
+    f.includeBus = true; f.busPrice = Number(r.bus_price_per_month) || 150; f.busMonths = Number(r.bus_months) || 1
+    f.busOverride = Number(r.bus_amount) !== f.busPrice * f.busMonths ? String(r.bus_amount) : ''
+  }
+  const sum = m => (pays || []).filter(p => p.method === m).reduce((a, p) => a + Number(p.amount), 0)
+  f.cashAmt = sum('نقدي'); f.networkAmt = sum('شبكة'); f.transferAmt = sum('تحويل')
+  f.networkReceipt = (pays || []).find(p => p.method === 'شبكة')?.receipt_url || ''
+  f.transferReceipt = (pays || []).find(p => p.method === 'تحويل')?.receipt_url || ''
+  return f
+}
+
+// newest first: by start date, then by when the record was entered
+function newestFirst(a, b) {
+  const da = a.start_date || '', db = b.start_date || ''
+  if (da !== db) return da < db ? 1 : -1
+  return String(b.created_at || '').localeCompare(String(a.created_at || ''))
+}
+function busNewest(a, b) {
+  const da = a.bus_start_date || a.start_date || '', db = b.bus_start_date || b.start_date || ''
+  if (da !== db) return da < db ? 1 : -1
+  return String(b.created_at || '').localeCompare(String(a.created_at || ''))
+}
 
 // ============ INVENTORY (sized) ============
 const INV_ORDER = ['طقم صيفي (جيرسي + شورت)', 'طقم شتوي', 'جوارب', 'حقيبة', 'حقيبة + جوارب', 'مياه']
@@ -260,7 +300,7 @@ function groupInventory(items) {
   })
 }
 
-function InventoryGrid({ items, onSale, onEdit }) {
+function InventoryGrid({ items, onSale }) {
   const groups = groupInventory(items)
   return (
     <>
@@ -272,7 +312,7 @@ function InventoryGrid({ items, onSale, onEdit }) {
               <div className="list-name">{g.name}</div>
               <div className="list-sub">{g.price} ر · <span style={{ color: g.stock <= 0 ? 'var(--red)' : 'var(--green)', fontWeight: 600 }}>متبقي {g.stock} {invUnit(g.name)}</span> · مباع {g.sold}</div>
             </div>
-            {onSale && <button onClick={() => onSale(g)} style={{ fontSize: 11, background: 'var(--red-l)', border: '1px solid var(--red-m)', borderRadius: 6, padding: '5px 12px', color: 'var(--red)', cursor: 'pointer', fontFamily: 'inherit' }}>تسجيل بيع</button>}
+            {onSale && <button onClick={() => onSale(g)} style={{ fontSize: 11, background: 'var(--green-l)', border: '1px solid var(--green)', borderRadius: 6, padding: '5px 12px', color: 'var(--green)', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>تسجيل بيع</button>}
           </div>
           {g.sized && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 1rem .75rem' }}>
@@ -285,46 +325,9 @@ function InventoryGrid({ items, onSale, onEdit }) {
               ))}
             </div>
           )}
-          {onEdit && !g.derived && (
-            <div style={{ padding: '0 1rem .75rem' }}>
-              <button onClick={() => onEdit(g)} style={{ width: '100%', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '.35rem', fontSize: 11, cursor: 'pointer', color: 'var(--t2)', fontFamily: 'inherit' }}>تعديل المخزون</button>
-            </div>
-          )}
         </div>
       ))}
     </>
-  )
-}
-
-function StockEditModal({ group, onClose, onSaved, toast }) {
-  const [vals, setVals] = useState({})
-  const [busy, setBusy] = useState(false)
-  useEffect(() => {
-    if (group) { const v = {}; group.rows.forEach(r => { v[r.id] = String(r.stock) }); setVals(v) }
-  }, [group])
-  async function save() {
-    const changed = group.rows.filter(r => String(r.stock) !== String(vals[r.id]))
-    for (const r of changed) {
-      const n = parseInt(vals[r.id])
-      if (isNaN(n) || n < 0) { alert('رقم غير صحيح'); return }
-    }
-    setBusy(true)
-    await Promise.all(changed.map(r => supabase.from('inventory').update({ stock: parseInt(vals[r.id]), updated_at: new Date().toISOString() }).eq('id', r.id)))
-    setBusy(false)
-    toast('✅ تم تحديث المخزون', 'success'); onSaved(); onClose()
-  }
-  return (
-    <Modal open={!!group} onClose={onClose} title={`تعديل مخزون: ${group?.name || ''}`}>
-      <div className="list-sub" style={{ marginBottom: '.75rem' }}>أدخل الكمية الفعلية الحالية لكل مقاس ({group ? invUnit(group.name) : ''})</div>
-      {group?.rows.map(r => (
-        <div key={r.id} className="form-row" style={{ alignItems: 'center', marginBottom: 6 }}>
-          <div style={{ fontSize: 13, color: 'var(--t1)', fontWeight: 500 }}>{r.size ? `مقاس ${r.size}` : 'الكمية'}</div>
-          <input className="form-input" type="number" min="0" value={vals[r.id] ?? ''} onChange={e => setVals(v => ({ ...v, [r.id]: e.target.value }))} />
-        </div>
-      ))}
-      <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'جاري الحفظ...' : 'حفظ'}</button>
-      <button className="btn-secondary" onClick={onClose}>إلغاء</button>
-    </Modal>
   )
 }
 
@@ -336,36 +339,51 @@ function PaymentModal({ target, onClose, toast, onDone, createdBy }) {
   const [busy, setBusy] = useState(false)
   const rec = target?.rec
   const type = target?.type
+  const resend = target?.resend            // a returned payment being fixed and sent again
   const balance = Number(rec?.balance || 0)
   const name = type === 'subscriber' ? rec?.name : type === 'booking' ? rec?.booker_name : (rec?.subscriber_name || rec?.item)
-  useEffect(() => { if (target) { setAmount(String(Number(target.rec.balance || 0))); setMethod('نقدي'); setReceipt('') } }, [target])
+  useEffect(() => {
+    if (target) {
+      setAmount(String(resend ? resend.amount : Number(target.rec.balance || 0)))
+      setMethod(resend ? resend.method : 'نقدي'); setReceipt(resend ? (resend.receipt_url || '') : '')
+    }
+  }, [target])
   async function save() {
     const a = Number(amount)
     if (!(a > 0)) { alert('أدخل مبلغاً صحيحاً'); return }
     if (a > balance) { alert('المبلغ أكبر من المتبقي'); return }
     if (method !== 'نقدي' && !receipt) { alert('يجب رفع الإيصال'); return }
     setBusy(true)
-    const split = type === 'subscriber' ? splitPayment(rec, a) : { pass_amount: 0, kit_part: 0 }
-    const { error } = await supabase.from('payments').insert({
-      branch: rec.branch, record_type: type, record_id: String(rec.id), amount: a, method,
-      receipt_url: receipt || null, paid_at: TODAY, status: 'pending', kind: 'later',
-      label: name, created_by: createdBy, ...split
-    })
+    const isBus = resend?.note === 'باص'
+    const split = isBus ? { pass_amount: a, kit_part: 0 } : type === 'subscriber' ? splitPayment(rec, a) : { pass_amount: 0, kit_part: 0 }
+    let error = null
+    if (resend) {
+      const r = await supabase.from('payments').update({ amount: a, method, receipt_url: receipt || null, status: 'pending', return_reason: null, returned_at: null, ...split }).eq('id', resend.id)
+      error = r.error
+    } else {
+      const r = await supabase.from('payments').insert({
+        branch: rec.branch, record_type: type, record_id: String(rec.id), amount: a, method,
+        receipt_url: receipt || null, paid_at: TODAY, status: 'pending', kind: 'later',
+        label: name, created_by: createdBy, ...split
+      })
+      error = r.error
+    }
     if (!error) await bumpPaid(type, rec.id, a)
     setBusy(false)
     if (error) { toast('خطأ في الحفظ', 'error'); console.error(error); return }
-    toast('✅ تم تسجيل الدفعة وإرسالها للمالك', 'success'); onDone(); onClose()
+    toast(resend ? '✅ أُعيدت الدفعة للمالك' : '✅ تم تسجيل الدفعة وإرسالها للمالك', 'success'); onDone(); onClose()
   }
   return (
-    <Modal open={!!target} onClose={onClose} title={`تسجيل دفعة: ${name || ''}`}>
+    <Modal open={!!target} onClose={onClose} title={`${resend ? 'تعديل الدفعة' : 'تسجيل دفعة'}: ${name || ''}`}>
+      {resend?.return_reason && <div className="info-box info-yellow">سبب الإرجاع: {resend.return_reason}</div>}
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: '.75rem' }}>
         <span style={{ color: 'var(--t3)' }}>المدفوع: {fmt(Number(type === 'booking' ? rec?.collected : rec?.paid_amount) || 0)} ر</span>
         <span style={{ color: 'var(--red)', fontWeight: 600 }}>المتبقي: {fmt(balance)} ر</span>
       </div>
       <div className="form-group"><label className="form-label">مبلغ الدفعة (ر)</label><input className="form-input" type="number" min="0" value={amount} onChange={e => setAmount(e.target.value)} /></div>
       <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={method} onChange={v => { setMethod(v); setReceipt('') }} /></div>
-      {method !== 'نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="payments" onUploaded={setReceipt} />}
-      <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'جاري الحفظ...' : 'تسجيل الدفعة'}</button>
+      {method !== 'نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="payments" current={receipt} onUploaded={setReceipt} />}
+      <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'جاري الحفظ...' : resend ? 'إعادة الإرسال للمالك' : 'تسجيل الدفعة'}</button>
       <button className="btn-secondary" onClick={onClose}>إلغاء</button>
     </Modal>
   )
@@ -396,8 +414,8 @@ function SubscriberDetail({ sub, onClose }) {
     load()
     return () => { alive = false }
   }, [sub])
-  const livePeriods = periods.filter(p => p.status !== 'rejected')
-  const liveSales = sales.filter(s => s.status !== 'rejected')
+  const livePeriods = periods.filter(p => p.status === 'approved' || p.status === 'pending')
+  const liveSales = sales.filter(s => s.status === 'approved' || s.status === 'pending')
   const paidTotal = livePeriods.reduce((a, p) => a + Number(p.paid_amount || 0), 0) + liveSales.reduce((a, s) => a + Number(s.paid_amount || 0), 0)
   const balTotal = livePeriods.reduce((a, p) => a + Number(p.balance || 0), 0) + liveSales.reduce((a, s) => a + Number(s.balance || 0), 0)
   return (
@@ -418,7 +436,7 @@ function SubscriberDetail({ sub, onClose }) {
                   <div className="list-name">{p.start_date || '؟'} ← {p.end_date || '؟'}</div>
                   <div className="list-sub">{fmt(p.total_amount)} ر{p.has_kit ? ' · طقم' : ''}{p.has_bus ? ' · باص' : ''}{Number(p.balance) > 0 ? ` · متبقي ${fmt(p.balance)} ر` : ''}</div>
                 </div>
-                <span className={`badge ${p.status === 'approved' ? 'badge-g' : p.status === 'pending' ? 'badge-o' : 'badge-r'}`} style={{ fontSize: 9 }}>{p.status === 'approved' ? 'معتمد' : p.status === 'pending' ? 'معلق' : 'مرفوض'}</span>
+                <span className={`badge ${p.status === 'approved' ? 'badge-g' : p.status === 'pending' || p.status === 'returned' ? 'badge-o' : 'badge-r'}`} style={{ fontSize: 9 }}>{p.status === 'approved' ? 'معتمد' : p.status === 'pending' ? 'معلق' : p.status === 'returned' ? 'أُعيد للتعديل' : p.status === 'cancelled' ? 'ملغي' : 'مرفوض'}</span>
               </div>
             ))}
           </div>
@@ -443,13 +461,264 @@ function SubscriberDetail({ sub, onClose }) {
                   <div className="list-sub">{p.paid_at}{p.receipt_url ? '' : ''}</div>
                   {p.receipt_url && <a href={p.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
                 </div>
-                {p.status === 'pending' && <span className="badge badge-o" style={{ fontSize: 9 }}>معلق</span>}
+                {p.status !== 'approved' && <span className="badge badge-o" style={{ fontSize: 9 }}>{p.status === 'pending' ? 'معلق' : p.status === 'returned' ? 'أُعيد' : p.status === 'cancelled' ? 'ملغي' : p.status}</span>}
               </div>
             ))}
           </div>
         </>
       )}
     </Modal>
+  )
+}
+
+// ============ APPROVAL, RETURN AND CANCEL COMPONENTS ============
+const MONTH_AR = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
+function fmtDay(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d)) return ''
+  return `${d.getDate()} ${MONTH_AR[d.getMonth()]}`
+}
+const methodIcon = m => m === 'نقدي' ? '💵' : m === 'شبكة' ? '💳' : m === 'تحويل' ? '📱' : '💰'
+const KIND_LABEL = { subscriber: 'اشتراك', booking: 'حجز', sale: 'بيع' }
+
+// one place that words every record type the same way (pending cards and the archive)
+function describeRecord(type, r) {
+  if (type === 'subscriber') return {
+    _label: r.renewal_of ? 'تجديد اشتراك' : 'اشتراك جديد', _amount: r.total_amount, _paid: r.paid_amount,
+    _desc: r.name + (r.type === 'family' ? ` · عائلة ${r.members_count || ''} أفراد` : ''), _by: r.created_by,
+    _meta: `${r.start_date || ''} ← ${r.end_date || ''}${r.guardian_phone ? ' · ' + r.guardian_phone : ''}`,
+  }
+  if (type === 'booking') return {
+    _label: 'حجز ملعب', _amount: r.amount, _paid: r.collected, _desc: r.booker_name, _by: r.created_by,
+    _meta: `${r.pitch === 'small' ? 'ملعب صغير' : 'ملعب كبير'} · ${r.date} · ${r.time || ''}${r.water ? ' · 💧' : ''}`,
+  }
+  if (type === 'sale') return {
+    _label: 'بيع مستلزمات', _amount: r.total, _paid: r.paid_amount, _desc: r.item + (r.size ? ' · ' + r.size : '') + ` × ${r.qty}`, _by: r.created_by,
+    _meta: `${r.subscriber_name ? r.subscriber_name + ' · ' : ''}${r.created_at ? r.created_at.slice(0, 10) : ''}`,
+  }
+  if (type === 'expense') return {
+    _label: 'مصروف', _amount: r.amount, _desc: r.description, _by: r.submitted_by, _meta: `${r.category} · ${r.date}`,
+  }
+  return {
+    _label: r.note === 'باص' ? 'دفعة باص' : r.kind === 'correction' ? 'تصحيح' : 'دفعة', _amount: r.amount, _desc: r.label, _by: r.created_by,
+    _meta: `${KIND_LABEL[r.record_type] || ''} · ${r.method} · ${r.paid_at}`,
+  }
+}
+
+function ReasonModal({ open, title, hint, confirmLabel, tone, onConfirm, onClose }) {
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { if (open) { setReason(''); setBusy(false) } }, [open])
+  async function go() {
+    if (!reason.trim()) { alert('اكتب السبب'); return }
+    setBusy(true)
+    await onConfirm(reason.trim())
+    setBusy(false)
+  }
+  return (
+    <Modal open={!!open} onClose={onClose} title={title}>
+      {hint && <div className="info-box info-blue">{hint}</div>}
+      <div className="form-group">
+        <label className="form-label">السبب</label>
+        <textarea className="form-input" rows={3} value={reason} onChange={e => setReason(e.target.value)} placeholder="اكتب السبب هنا" />
+      </div>
+      <button className="btn-primary" disabled={busy} onClick={go} style={{ background: tone === 'danger' ? 'var(--red)' : 'var(--orange)' }}>{busy ? 'جاري الحفظ...' : confirmLabel}</button>
+      <button className="btn-secondary" onClick={onClose}>رجوع</button>
+    </Modal>
+  )
+}
+
+// owner only: fix the total and the paid amount of an approved subscription, with a saved reason
+function CorrectionModal({ rec, onClose, onDone, toast }) {
+  const [total, setTotal] = useState('')
+  const [paid, setPaid] = useState('')
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { if (rec) { setTotal(String(Number(rec.total_amount || 0))); setPaid(String(Number(rec.paid_amount || 0))); setReason('') } }, [rec])
+  async function save() {
+    const t = Number(total), p = Number(paid)
+    if (isNaN(t) || t < 0 || isNaN(p) || p < 0) { alert('أدخل مبالغ صحيحة'); return }
+    if (p > t) { alert('المدفوع أكبر من الإجمالي'); return }
+    if (t === Number(rec.total_amount || 0) && p === Number(rec.paid_amount || 0)) { alert('لم تتغير أي قيمة'); return }
+    if (!reason.trim()) { alert('اكتب سبب التصحيح'); return }
+    setBusy(true)
+    await correctSubscription(rec, t, p, reason.trim())
+    setBusy(false)
+    toast('✅ تم تصحيح المبلغ', 'success'); onDone(); onClose()
+  }
+  return (
+    <Modal open={!!rec} onClose={onClose} title={`تصحيح المبلغ: ${rec?.name || ''}`}>
+      <div className="info-box info-blue">يُصحَّح الإجمالي والمدفوع معاً، ويُحسب الفرق في شهر الدفعة الأصلية. يُحفظ السبب في سجل المشترك.</div>
+      <div className="form-row">
+        <div className="form-group"><label className="form-label">الإجمالي الصحيح (ر)</label><input className="form-input" type="number" min="0" value={total} onChange={e => setTotal(e.target.value)} /></div>
+        <div className="form-group"><label className="form-label">المدفوع الصحيح (ر)</label><input className="form-input" type="number" min="0" value={paid} onChange={e => setPaid(e.target.value)} /></div>
+      </div>
+      <div className="form-group"><label className="form-label">سبب التصحيح</label><textarea className="form-input" rows={2} value={reason} onChange={e => setReason(e.target.value)} placeholder="مثال: الإيصال يظهر 750 والبطاقة 700" /></div>
+      <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'جاري الحفظ...' : 'حفظ التصحيح'}</button>
+      <button className="btn-secondary" onClick={onClose}>رجوع</button>
+    </Modal>
+  )
+}
+
+// the owner's approval card: how it was paid, the totals, every receipt, then two buttons only
+function ApprovalCard({ item, onApprove, onReturn }) {
+  const pays = item._pays || []
+  const hasMoney = item._type === 'subscriber' || item._type === 'booking' || item._type === 'sale'
+  const total = Number(item._amount || 0)
+  const paid = pays.length ? pays.reduce((a, p) => a + Number(p.amount || 0), 0) : Number(item._paid || 0)
+  const remaining = total - paid
+  const typeIcon = { subscriber: '👤', booking: '🏟️', sale: '🛍️', expense: '💸', payment: '💰' }[item._type]
+  return (
+    <div style={{ padding: '.9rem 1rem', borderBottom: '1px solid #fde68a' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 18 }}>{typeIcon}</span>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--t1)' }}>{item._desc}</div>
+            <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 2 }}>{item._meta}</div>
+            {item._by && <div style={{ fontSize: 10, color: 'var(--t3)' }}>بواسطة: {item._by}</div>}
+          </div>
+        </div>
+        <span className="badge badge-o" style={{ fontSize: 10, flexShrink: 0 }}>{item._label}</span>
+      </div>
+
+      {item._flags && item._flags.length > 0 && (
+        <div style={{ marginTop: 8, background: 'var(--orange-l)', border: '1px solid #fbbf24', borderRadius: 8, padding: '.4rem .6rem' }}>
+          {item._flags.map(t => <div key={t} style={{ fontSize: 11, color: 'var(--orange)', fontWeight: 600 }}>⚠️ {t}</div>)}
+        </div>
+      )}
+
+      <div style={{ background: '#fff', border: '1px solid #fde68a', borderRadius: 8, padding: '.6rem .75rem', marginTop: 8 }}>
+        {hasMoney && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid var(--border)' }}>
+            <span style={{ color: 'var(--t2)' }}>الإجمالي <b style={{ color: 'var(--t1)' }}>{fmt(total)} ر</b></span>
+            <span style={{ color: 'var(--t2)' }}>المدفوع <b style={{ color: 'var(--green)' }}>{fmt(paid)} ر</b></span>
+          </div>
+        )}
+        {pays.length === 0 && <div style={{ fontSize: 12, color: 'var(--t3)' }}>لا توجد دفعات مسجلة</div>}
+        {pays.map((p, i) => (
+          <div key={p.id || i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderTop: i ? '1px dashed var(--border)' : 'none' }}>
+            <span style={{ fontSize: 12, color: 'var(--t1)' }}>{methodIcon(p.method)} {p.method}{p.note && p.note !== 'باص' ? ` (${p.note})` : ''}</span>
+            <span style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <b style={{ fontSize: 13 }}>{fmt(p.amount)} ر</b>
+              {p.receipt_url
+                ? <a href={p.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>
+                : p.method !== 'نقدي' ? <span style={{ fontSize: 10, color: 'var(--red)', fontWeight: 600 }}>⚠️ بدون إيصال</span> : null}
+            </span>
+          </div>
+        ))}
+        {hasMoney && remaining > 0 && (
+          <div style={{ marginTop: 8, background: 'var(--red-l)', border: '1px solid var(--red-m)', color: 'var(--red)', borderRadius: 6, padding: '5px 8px', fontSize: 13, fontWeight: 700, textAlign: 'center' }}>
+            المتبقي {fmt(remaining)} ر
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: '1rem', marginTop: '1.1rem', paddingTop: '.9rem', borderTop: '1px solid #fcd34d' }}>
+        <button onClick={() => onReturn(item)} style={{ flex: 1, padding: '.6rem', fontSize: 13, fontFamily: 'inherit', cursor: 'pointer', background: '#fff', color: 'var(--orange)', border: '1.5px solid var(--orange)', borderRadius: 8, fontWeight: 600 }}>↩ إرجاع للتعديل</button>
+        <button onClick={() => onApprove(item)} style={{ flex: 1, padding: '.6rem', fontSize: 13, fontFamily: 'inherit', cursor: 'pointer', background: 'var(--green)', color: '#fff', border: '1.5px solid var(--green)', borderRadius: 8, fontWeight: 600 }}>✓ موافقة</button>
+      </div>
+    </div>
+  )
+}
+
+// a collapsed list: only the count shows until it is opened
+function ExpiringBox({ rows, onRenew, showSplit }) {
+  const [open, setOpen] = useState(false)
+  if (!rows.length) return null
+  const week1 = rows.filter(s => daysBetween(TODAY, s.end_date) <= 7).length
+  return (
+    <div className="card" style={{ borderColor: 'var(--orange)', marginBottom: '.75rem' }}>
+      <button onClick={() => setOpen(o => !o)} style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '.7rem 1rem', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--orange)' }}>⚠️ {rows.length} تنتهي اشتراكاتهم قريباً</span>
+        <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          {showSplit && <><span className="badge badge-r" style={{ fontSize: 10 }}>هذا الأسبوع {week1}</span><span className="badge badge-o" style={{ fontSize: 10 }}>الأسبوع القادم {rows.length - week1}</span></>}
+          <span style={{ color: 'var(--orange)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
+        </span>
+      </button>
+      {open && rows.map(s => {
+        const days = daysBetween(TODAY, s.end_date)
+        return (
+          <div key={s.id} className="list-row">
+            <div className="list-left">
+              <div className="list-av list-av-yellow">{s.name[0]}</div>
+              <div>
+                <div className="list-name">{s.name}</div>
+                <div className="list-sub">ينتهي {s.end_date}{s.guardian_phone ? ` · 📞 ${s.guardian_phone}` : ''}</div>
+              </div>
+            </div>
+            <div className="list-right">
+              <span className={`badge ${days <= 3 ? 'badge-r' : 'badge-o'}`} style={{ fontSize: 10 }}>{days === 0 ? 'اليوم' : `${days} أيام`}</span>
+              {onRenew && <button onClick={() => onRenew(s)} style={{ fontSize: 10, background: 'var(--green-l)', border: '1px solid var(--green)', borderRadius: 6, padding: '3px 8px', color: 'var(--green)', cursor: 'pointer', fontFamily: 'inherit', marginTop: 3 }}>تجديد</button>}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function ReturnedSection({ count, children }) {
+  if (!count) return null
+  return (
+    <div style={{ marginBottom: '.75rem' }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--orange)', margin: '0 0 .5rem' }}>↩️ أُعيد للتعديل ({count})</div>
+      {children}
+    </div>
+  )
+}
+
+function ReturnedCard({ title, sub, amount, reason, returnedAt, onEdit, onDelete }) {
+  return (
+    <div style={{ border: '1px solid var(--orange)', background: 'var(--orange-l)', borderRadius: 'var(--r)', padding: '.8rem 1rem', marginBottom: '.6rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+        <div><div className="list-name">{title}</div><div className="list-sub">{sub}</div></div>
+        {amount != null && <b style={{ fontSize: 13, flexShrink: 0 }}>{fmt(amount)} ر</b>}
+      </div>
+      <div style={{ background: '#fff', border: '1px solid #fde68a', borderRadius: 8, padding: '.5rem .65rem', marginTop: 8, fontSize: 12, color: 'var(--t1)' }}>
+        <div style={{ fontSize: 10, color: 'var(--orange)', fontWeight: 700, marginBottom: 2 }}>سبب الإرجاع{returnedAt ? ` · ${fmtDay(returnedAt)}` : ''}</div>
+        {reason || '—'}
+      </div>
+      <div style={{ display: 'flex', gap: '.6rem', marginTop: 10 }}>
+        <button onClick={onEdit} style={{ flex: 1, padding: '.5rem', fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', background: 'var(--green)', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 600 }}>تعديل وإعادة الإرسال</button>
+        {onDelete && <button onClick={onDelete} style={{ padding: '.5rem .9rem', fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', background: '#fff', color: 'var(--red)', border: '1px solid var(--red-m)', borderRadius: 8 }}>حذف</button>}
+      </div>
+    </div>
+  )
+}
+
+// returned later payments of one record type (subscriber, booking or sale)
+function ReturnedPaymentsBox({ branch, recordType, createdBy, refresh, toast, onDone }) {
+  const [rows, setRows] = useState([])
+  const [target, setTarget] = useState(null)
+  async function load() {
+    const { data } = await supabase.from('payments').select('*').eq('branch', branch).eq('record_type', recordType)
+      .eq('kind', 'later').eq('status', 'returned').eq('created_by', createdBy)
+    setRows(data || [])
+  }
+  useEffect(() => { load() }, [refresh, branch])
+  async function edit(p) {
+    const table = p.record_type === 'subscriber' ? 'subscribers' : p.record_type === 'booking' ? 'bookings' : 'sales'
+    const { data } = await supabase.from(table).select('*').eq('id', p.record_id).single()
+    if (data) setTarget({ type: p.record_type, rec: data, resend: p })
+  }
+  async function del(p) {
+    if (!confirm('حذف هذه الدفعة؟')) return
+    await supabase.from('payments').delete().eq('id', p.id)
+    load(); if (onDone) onDone()
+  }
+  if (!rows.length) return null
+  return (
+    <>
+      <ReturnedSection count={rows.length}>
+        {rows.map(p => (
+          <ReturnedCard key={p.id} title={`دفعة: ${p.label || ''}`} sub={`${p.method} · ${p.paid_at}${p.note === 'باص' ? ' · باص' : ''}`} amount={p.amount}
+            reason={p.return_reason} returnedAt={p.returned_at} onEdit={() => edit(p)} onDelete={p.note === 'باص' ? null : () => del(p)} />
+        ))}
+      </ReturnedSection>
+      <PaymentModal target={target} onClose={() => setTarget(null)} toast={toast} onDone={() => { load(); if (onDone) onDone() }} createdBy={createdBy} />
+    </>
   )
 }
 
@@ -505,23 +774,26 @@ function OwnerDashboard({ toast, refresh, branch }) {
   const [topSubs, setTopSubs] = useState([])
   const [dowData, setDowData] = useState([0,0,0,0,0,0,0])
   const [expiringSoon, setExpiringSoon] = useState([])
+  const [flagList, setFlagList] = useState([])
+  const [showFlags, setShowFlags] = useState(false)
   const [pitchUtil, setPitchUtil] = useState({ rate:0, bookedHours:0, availableHours:0 })
   const [loading, setLoading] = useState(true)
   const [archiveFilter, setArchiveFilter] = useState('all')
-  const [archiveMonth, setArchiveMonth] = useState('all')
+  const [archiveMonth, setArchiveMonth] = useState(TODAY.slice(0,7))
+  const [archiveLoading, setArchiveLoading] = useState(true)
   const [owed, setOwed] = useState({ total:0, items:[] })
+  const [reasonFor, setReasonFor] = useState(null)     // { mode: 'return' | 'cancel', item }
+  const [corrRec, setCorrRec] = useState(null)
 
   async function load(m) {
     setLoading(true)
     const start = m+'-01', end = monthEnd(m)
-
-    // Calculate previous month
     const [py, pm] = m.split('-').map(Number)
     const prevM = pm === 1 ? `${py-1}-12` : `${py}-${String(pm-1).padStart(2,'0')}`
     const prevStart = prevM+'-01', prevEnd = monthEnd(prevM)
 
     const [bkRes, expRes, subRes, prevExpRes, subCount, rev, prevRev, owedSubs, owedBks, owedSales] = await Promise.all([
-      supabase.from('bookings').select('date,amount').eq('branch', branch).eq('status','approved').gte('date', start).lte('date', end),
+      supabase.from('bookings').select('date,amount,booker_name').eq('branch', branch).eq('status','approved').gte('date', start).lte('date', end),
       supabase.from('expenses').select('amount,category').eq('branch', branch).eq('status','approved').gte('date', start).lte('date', end),
       supabase.from('subscribers').select('*').eq('branch', branch).eq('status','approved').eq('is_current', true),
       supabase.from('expenses').select('amount').eq('branch', branch).eq('status','approved').gte('date', prevStart).lte('date', prevEnd),
@@ -533,7 +805,8 @@ function OwnerDashboard({ toast, refresh, branch }) {
       supabase.from('sales').select('id,item,subscriber_name,balance').eq('branch', branch).eq('status','approved').gt('balance', 0),
     ])
 
-    const bks = bkRes.data||[]
+    // water-only rows from the imports are not pitch bookings
+    const bks = (bkRes.data||[]).filter(b => b.booker_name !== 'مياه' && b.booker_name !== 'مياه فقط')
     const subs = subRes.data||[]
     const exp = (expRes.data||[]).reduce((a,e) => a+Number(e.amount), 0)
     // revenue is the money actually received in the month (approved payments), not the booked or invoiced value
@@ -548,102 +821,73 @@ function OwnerDashboard({ toast, refresh, branch }) {
     ].sort((a,b) => b.amount-a.amount)
     setOwed({ total: owedItems.reduce((a,o) => a+o.amount, 0), items: owedItems })
 
-    // Top subscribers
-    const sorted = [...subs].sort((a,b) => Number(b.total_amount||0)-Number(a.total_amount||0)).slice(0,5)
-    setTopSubs(sorted)
+    setTopSubs([...subs].sort((a,b) => Number(b.total_amount||0)-Number(a.total_amount||0)).slice(0,5))
 
-    // Day of week breakdown (0=Sun..6=Sat, display Sat-Sun Arabic style)
-    const dowCount = [0,0,0,0,0,0,0] // Sun Mon Tue Wed Thu Fri Sat
-    bks.forEach(b => { if(b.date) { const d = new Date(b.date).getDay(); dowCount[d]++ } })
+    const dowCount = [0,0,0,0,0,0,0]
+    bks.forEach(b => { if (b.date) dowCount[new Date(b.date).getDay()]++ })
     setDowData(dowCount)
 
-    // Pitch utilization - available hours per month = days * 8 hours / 2hr slots = days * 4 slots * 2 pitches
     const daysInMonth = new Date(py, pm, 0).getDate()
-    const availableSlots = daysInMonth * 4 * 2 // 4 two-hour slots per night, 2 pitches
-    const bookedSlots = bks.length
-    setPitchUtil({ rate: Math.round((bookedSlots/availableSlots)*100), bookedHours: bookedSlots*2, availableHours: availableSlots*2 })
+    const availableSlots = daysInMonth * 4 * 2
+    setPitchUtil({ rate: Math.round((bks.length/availableSlots)*100), bookedHours: bks.length*2, availableHours: availableSlots*2 })
 
-    // Expiring soon - next 14 days
-    const soon = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d !== null && d >= 0 && d <= 14 }).sort((a,b) => daysBetween(TODAY,a.end_date)-daysBetween(TODAY,b.end_date))
-    setExpiringSoon(soon)
+    setExpiringSoon(subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d !== null && d >= 0 && d <= 14 }).sort((a,b) => daysBetween(TODAY,a.end_date)-daysBetween(TODAY,b.end_date)))
+    setFlagList(subs.map(s => ({ s, reasons: subscriptionFlags(s, subs) })).filter(x => x.reasons.length))
 
-    // Pending approvals - all types (a later payment on an approved record is its own item)
+    // everything waiting for the owner, with the payments entered together with it
     const [pBk, pEx, pSl, pSub, pPay] = await Promise.all([
       supabase.from('bookings').select('*').eq('branch', branch).eq('status','pending').order('created_at',{ascending:false}),
       supabase.from('expenses').select('*').eq('branch', branch).eq('status','pending').order('created_at',{ascending:false}),
       supabase.from('sales').select('*').eq('branch', branch).eq('status','pending').order('created_at',{ascending:false}),
       supabase.from('subscribers').select('*').eq('branch', branch).eq('status','pending').order('created_at',{ascending:false}),
-      supabase.from('payments').select('*').eq('branch', branch).eq('status','pending').eq('kind','later').order('created_at',{ascending:false}),
+      supabase.from('payments').select('*').eq('branch', branch).eq('status','pending'),
     ])
-    const payKind = t => t==='subscriber'?'اشتراك':t==='booking'?'حجز':'بيع'
-
+    const payMap = {}
+    ;(pPay.data||[]).filter(p => p.kind==='initial').forEach(p => { const k = p.record_type+':'+p.record_id; (payMap[k] = payMap[k] || []).push(p) })
+    const card = (type, r) => ({ ...r, _type:type, ...describeRecord(type, r), _pays: payMap[type+':'+r.id] || [], _flags: type==='subscriber' ? subscriptionFlags(r, subs) : [] })
     const allPending = [
-      ...(pSub.data||[]).map(r => ({...r, _type:'subscriber', _label:r.renewal_of?'تجديد اشتراك':'اشتراك جديد', _amount:r.total_amount, _desc:r.name, _by:r.created_by, _meta:`${r.payment_method} · مدفوع ${fmt(r.paid_amount||0)} من ${fmt(r.total_amount)}${r.guardian_phone?' · '+r.guardian_phone:''}`})),
-      ...(pBk.data||[]).map(r => ({...r, _type:'booking', _label:'حجز ملعب', _amount:r.amount, _desc:r.booker_name, _by:r.created_by, _meta:`${r.pitch==='small'?'ملعب صغير':'ملعب كبير'} · ${r.date} · ${r.time} · مدفوع ${fmt(r.collected||0)} من ${fmt(r.amount)}`})),
-      ...(pSl.data||[]).map(r => ({...r, _type:'sale', _label:'بيع مستلزمات', _amount:r.total, _desc:r.item+(r.size?' · '+r.size:''), _by:r.created_by, _meta:`${r.subscriber_name?r.subscriber_name+' · ':''}${r.qty} قطعة · مدفوع ${fmt(r.paid_amount||0)} من ${fmt(r.total)}`})),
-      ...(pEx.data||[]).map(r => ({...r, _type:'expense', _label:'مصروف', _amount:r.amount, _desc:r.description, _by:r.submitted_by, _meta:`${r.category} · ${r.date} · ${r.payment_method}`})),
-      ...(pPay.data||[]).map(r => ({...r, _type:'payment', _label:r.note==='باص'?'دفعة باص':'دفعة', _amount:r.amount, _desc:r.label, _by:r.created_by, _meta:`${payKind(r.record_type)} · ${r.method} · ${r.paid_at}`})),
+      ...(pSub.data||[]).map(r => card('subscriber', r)),
+      ...(pBk.data||[]).map(r => card('booking', r)),
+      ...(pSl.data||[]).map(r => card('sale', r)),
+      ...(pEx.data||[]).map(r => ({ ...r, _type:'expense', ...describeRecord('expense', r), _pays:[{ id:'e'+r.id, method:r.payment_method, amount:r.amount, receipt_url:r.receipt_url }], _flags:[] })),
+      ...(pPay.data||[]).filter(p => p.kind==='later').map(p => ({ ...p, _type:'payment', ...describeRecord('payment', p), _pays:[p], _flags:[] })),
     ].sort((a,b) => new Date(b.created_at)-new Date(a.created_at))
     setPending(allPending)
-
-    // Archive
-    const [aBk, aEx, aSl, aSub, aPay] = await Promise.all([
-      supabase.from('bookings').select('*').eq('branch', branch).neq('status','pending').order('created_at',{ascending:false}).limit(10),
-      supabase.from('expenses').select('*').eq('branch', branch).neq('status','pending').order('approved_at',{ascending:false}).limit(10),
-      supabase.from('sales').select('*').eq('branch', branch).neq('status','pending').order('created_at',{ascending:false}).limit(10),
-      supabase.from('subscribers').select('*').eq('branch', branch).neq('status','pending').order('created_at',{ascending:false}).limit(10),
-      supabase.from('payments').select('*').eq('branch', branch).eq('kind','later').neq('status','pending').order('created_at',{ascending:false}).limit(10),
-    ])
-    const allArchive = [
-      ...(aSub.data||[]).map(r => ({...r, _type:'subscriber', _label:r.renewal_of?'تجديد':'اشتراك', _amount:r.total_amount, _desc:r.name, _meta:r.payment_method})),
-      ...(aBk.data||[]).map(r => ({...r, _type:'booking', _label:'حجز ملعب', _amount:r.amount, _desc:r.booker_name, _meta:`${r.date} · ${r.payment_method}`})),
-      ...(aSl.data||[]).map(r => ({...r, _type:'sale', _label:'بيع', _amount:r.total, _desc:r.item, _meta:r.payment_method})),
-      ...(aEx.data||[]).map(r => ({...r, _type:'expense', _label:'مصروف', _amount:r.amount, _desc:r.description, _meta:`${r.category} · ${r.payment_method}`})),
-      ...(aPay.data||[]).map(r => ({...r, _type:'payment', _label:r.note==='باص'?'دفعة باص':'دفعة', _amount:r.amount, _desc:r.label, _meta:`${payKind(r.record_type)} · ${r.method}`})),
-    ].sort((a,b) => new Date(b.created_at||b.approved_at)-new Date(a.created_at||a.approved_at)).slice(0,20)
-    setArchive(allArchive)
     setLoading(false)
   }
 
+  // the archive of one month, newest approval first
+  async function loadArchive(m) {
+    setArchiveLoading(true)
+    const start = m+'-01', end = monthEnd(m)
+    const st = ['approved','cancelled','rejected']
+    const [aBk, aEx, aSl, aSub, aPay] = await Promise.all([
+      supabase.from('bookings').select('*').eq('branch', branch).in('status', st).gte('date', start).lte('date', end).limit(1000),
+      supabase.from('expenses').select('*').eq('branch', branch).in('status', st).gte('date', start).lte('date', end).limit(1000),
+      supabase.from('sales').select('*').eq('branch', branch).in('status', st).gte('created_at', start+'T00:00:00').lte('created_at', end+'T23:59:59').limit(1000),
+      supabase.from('subscribers').select('*').eq('branch', branch).in('status', st).gte('start_date', start).lte('start_date', end).limit(1000),
+      supabase.from('payments').select('*').eq('branch', branch).eq('kind','later').in('status', st).gte('paid_at', start).lte('paid_at', end).limit(1000),
+    ])
+    const mk = (type, rows) => (rows||[]).map(r => ({ ...r, _type:type, ...describeRecord(type, r), _when: r.approved_at || r.created_at }))
+    setArchive([...mk('subscriber', aSub.data), ...mk('booking', aBk.data), ...mk('sale', aSl.data), ...mk('expense', aEx.data), ...mk('payment', aPay.data)]
+      .sort((a,b) => new Date(b._when||0) - new Date(a._when||0)))
+    setArchiveLoading(false)
+  }
+
   useEffect(() => { load(month) }, [month, refresh, branch])
+  useEffect(() => { loadArchive(archiveMonth) }, [archiveMonth, refresh, branch])
 
   async function approveItem(item) {
-    if (item._type==='payment') {
-      await supabase.from('payments').update({ status:'approved' }).eq('id', item.id)
-    } else {
-      const table = item._type==='subscriber'?'subscribers':item._type==='booking'?'bookings':item._type==='sale'?'sales':'expenses'
-      const updateData = item._type==='expense'
-        ? { status:'approved', approved_by:'المالك', approved_at:new Date().toISOString() }
-        : { status:'approved' }
-      await supabase.from(table).update(updateData).eq('id', item.id)
-      if (item._type!=='expense') {
-        // the payments entered together with the record are approved with it
-        await supabase.from('payments').update({ status:'approved' }).eq('record_type', item._type).eq('record_id', String(item.id)).eq('kind','initial').eq('status','pending')
-        // an approved renewal closes the previous period of the same subscriber
-        if (item._type==='subscriber' && item.renewal_of) await supabase.from('subscribers').update({ is_current:false }).eq('id', item.renewal_of)
-      }
-    }
-    toast('✅ تمت الموافقة','success'); load(month)
+    await approveRecord(item._type, item)
+    toast('✅ تمت الموافقة','success'); load(month); loadArchive(archiveMonth)
   }
-  async function rejectItem(item) {
-    if (item._type==='payment') {
-      await supabase.from('payments').update({ status:'rejected' }).eq('id', item.id)
-      await bumpPaid(item.record_type, item.record_id, -Number(item.amount))
-    } else {
-      const table = item._type==='subscriber'?'subscribers':item._type==='booking'?'bookings':item._type==='sale'?'sales':'expenses'
-      const updateData = item._type==='expense'
-        ? { status:'rejected', approved_by:'المالك', approved_at:new Date().toISOString() }
-        : { status:'rejected' }
-      await supabase.from(table).update(updateData).eq('id', item.id)
-      if (item._type!=='expense') {
-        await supabase.from('payments').update({ status:'rejected' }).eq('record_type', item._type).eq('record_id', String(item.id)).eq('kind','initial').eq('status','pending')
-        // a rejected record gives its stock back
-        if (item._type==='sale') await supabase.rpc('adjust_inventory', { p_name:item.item, p_size:item.size||'', p_qty:Number(item.qty||1) })
-        if (item._type==='booking' && item.water) await supabase.rpc('adjust_inventory', { p_name:'مياه', p_size:'', p_qty:1 })
-        if (item._type==='subscriber' && item.has_kit && item.kit_item) await supabase.rpc('adjust_inventory', { p_name:item.kit_item, p_size:item.kit_size||'', p_qty:1 })
-      }
-    }
-    toast('تم الرفض','error'); load(month)
+  async function confirmReason(reason) {
+    const { mode, item } = reasonFor
+    if (mode === 'return') await returnRecord(item._type, item, reason)
+    else await cancelRecord(item._type, item, reason)
+    setReasonFor(null)
+    toast(mode === 'return' ? '↩️ أُعيدت البطاقة للتعديل' : 'تم الإلغاء', mode === 'return' ? 'success' : 'error')
+    load(month); loadArchive(archiveMonth)
   }
 
   const totalRev = stats.pitchRev + stats.subRev + stats.kitRev + stats.otherRev
@@ -656,7 +900,9 @@ function OwnerDashboard({ toast, refresh, branch }) {
   ].filter(r => r.val > 0)
 
   const typeIcon = { subscriber:'👤', booking:'🏟️', sale:'🛍️', expense:'💸', payment:'💰' }
-  const typeColor = { subscriber:'badge-b', booking:'badge-r', sale:'badge-g', expense:'badge-o', payment:'badge-b' }
+  const statusLabel = { approved:'معتمد', cancelled:'ملغي', rejected:'مرفوض' }
+  const archiveShown = archiveFilter === 'all' ? archive : archive.filter(i => i._type === archiveFilter)
+  const tiny = { fontSize:9, borderRadius:5, padding:'2px 6px', cursor:'pointer', fontFamily:'inherit' }
 
   return (
     <div className="page">
@@ -679,6 +925,58 @@ function OwnerDashboard({ toast, refresh, branch }) {
         <div className="kpi"><div className="kpi-label">المصاريف</div><div className="kpi-val kpi-val-r">{fmt(stats.exp)} ر</div></div>
       </div>
 
+      {/* PENDING APPROVALS */}
+      {pending.length > 0 && (
+        <div style={{ background:'var(--orange-l)', border:'1px solid #fbbf24', borderRadius:'var(--r)', marginBottom:'.75rem', overflow:'hidden' }}>
+          <div style={{ padding:'.75rem 1rem', borderBottom:'1px solid #fde68a' }}>
+            <span style={{ fontSize:12, fontWeight:700, color:'var(--orange)' }}>⏳ بانتظار الموافقة ({pending.length})</span>
+          </div>
+          {pending.map(item => <ApprovalCard key={item._type+item.id} item={item} onApprove={approveItem} onReturn={it => setReasonFor({ mode:'return', item:it })} />)}
+        </div>
+      )}
+
+      {/* FLAGS */}
+      {flagList.length > 0 && (
+        <div className="card" style={{ borderColor:'var(--orange)', marginBottom:'.75rem' }}>
+          <button onClick={() => setShowFlags(o => !o)} style={{ width:'100%', display:'flex', justifyContent:'space-between', alignItems:'center', padding:'.7rem 1rem', background:'transparent', border:'none', cursor:'pointer', fontFamily:'inherit' }}>
+            <span style={{ fontSize:13, fontWeight:700, color:'var(--orange)' }}>⚠️ {flagList.length} اشتراك يحتاج مراجعة</span>
+            <span style={{ color:'var(--orange)', fontSize:11 }}>{showFlags ? '▲' : '▼'}</span>
+          </button>
+          {showFlags && flagList.map(({ s, reasons }) => (
+            <div key={s.id} className="list-row" style={{ alignItems:'flex-start' }}>
+              <div className="list-left">
+                <div className="list-av list-av-yellow">{s.name[0]}</div>
+                <div>
+                  <div className="list-name">{s.name}</div>
+                  {reasons.map(t => <div key={t} className="list-sub" style={{ color:'var(--orange)' }}>{t}</div>)}
+                </div>
+              </div>
+              <span className="badge badge-grey">{fmt(s.sub_amount)} ر</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* EXPIRING SOON */}
+      <ExpiringBox rows={expiringSoon} showSplit />
+
+      {/* UNPAID BALANCES */}
+      {owed.total > 0 && (
+        <div className="card" style={{ borderColor:'var(--red)' }}>
+          <div style={{ padding:'.6rem 1rem', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <span style={{ fontSize:11, fontWeight:600, color:'var(--red)' }}>💰 مبالغ مستحقة غير مدفوعة ({owed.items.length})</span>
+            <span style={{ fontSize:13, fontWeight:700, color:'var(--red)' }}>{fmt(owed.total)} ر</span>
+          </div>
+          {owed.items.slice(0,8).map(o => (
+            <div key={o.key} className="list-row">
+              <div className="list-left"><div><div className="list-name">{o.name}</div><div className="list-sub">{o.kind}</div></div></div>
+              <span className="badge badge-r">{fmt(o.amount)} ر</span>
+            </div>
+          ))}
+          {owed.items.length>8 && <div className="empty" style={{ padding:'.75rem' }}>+{owed.items.length-8} آخرين</div>}
+        </div>
+      )}
+
       {/* REVENUE BREAKDOWN DONUT */}
       {revenueBreakdown.length > 0 && (
         <div className="card">
@@ -699,55 +997,6 @@ function OwnerDashboard({ toast, refresh, branch }) {
               ))}
             </div>
           </div>
-        </div>
-      )}
-
-      {/* UNPAID BALANCES */}
-      {owed.total > 0 && (
-        <div className="card" style={{ borderColor:'var(--red)' }}>
-          <div style={{ padding:'.6rem 1rem', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <span style={{ fontSize:11, fontWeight:600, color:'var(--red)' }}>💰 مبالغ مستحقة غير مدفوعة ({owed.items.length})</span>
-            <span style={{ fontSize:13, fontWeight:700, color:'var(--red)' }}>{fmt(owed.total)} ر</span>
-          </div>
-          {owed.items.slice(0,8).map(o => (
-            <div key={o.key} className="list-row">
-              <div className="list-left"><div><div className="list-name">{o.name}</div><div className="list-sub">{o.kind}</div></div></div>
-              <span className="badge badge-r">{fmt(o.amount)} ر</span>
-            </div>
-          ))}
-          {owed.items.length>8 && <div className="empty" style={{ padding:'.75rem' }}>+{owed.items.length-8} آخرين</div>}
-        </div>
-      )}
-
-      {/* PENDING APPROVALS */}
-      {pending.length > 0 && (
-        <div style={{ background:'var(--orange-l)', border:'1px solid #fbbf24', borderRadius:'var(--r)', marginBottom:'.75rem', overflow:'hidden' }}>
-          <div style={{ padding:'.75rem 1rem', borderBottom:'1px solid #fde68a', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <span style={{ fontSize:12, fontWeight:700, color:'var(--orange)' }}>⏳ بانتظار الموافقة ({pending.length})</span>
-          </div>
-          {pending.map(item => (
-            <div key={item.id} style={{ padding:'.75rem 1rem', borderBottom:'1px solid #fde68a' }}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'.5rem' }}>
-                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                  <span style={{ fontSize:16 }}>{typeIcon[item._type]}</span>
-                  <div>
-                    <div style={{ fontSize:13, fontWeight:600, color:'var(--t1)' }}>{item._desc}</div>
-                    <div style={{ fontSize:11, color:'var(--t3)', marginTop:2 }}>{item._meta}</div>
-                    {item._by && <div style={{ fontSize:10, color:'var(--t3)' }}>بواسطة: {item._by}</div>}
-                  </div>
-                </div>
-                <div style={{ textAlign:'left', flexShrink:0 }}>
-                  <span className={`badge ${typeColor[item._type]}`} style={{ fontSize:10, marginBottom:4, display:'block' }}>{item._label}</span>
-                  <span style={{ fontSize:13, fontWeight:700, color:'var(--t1)' }}>{fmt(item._amount)} ر</span>
-                </div>
-              </div>
-              {item.receipt_url && <a href={item.receipt_url} target="_blank" rel="noreferrer" className="receipt-link" style={{ marginBottom:'.5rem', display:'inline-block' }}>📎 إيصال</a>}
-              <div style={{ display:'flex', gap:.5+'rem' }}>
-                <button className="btn-approve" style={{ flex:1, padding:'.5rem', fontSize:12 }} onClick={() => approveItem(item)}>✓ موافقة</button>
-                <button className="btn-reject" style={{ flex:1, padding:'.5rem', fontSize:12 }} onClick={() => rejectItem(item)}>✕ رفض</button>
-              </div>
-            </div>
-          ))}
         </div>
       )}
 
@@ -785,9 +1034,7 @@ function OwnerDashboard({ toast, refresh, branch }) {
 
       {/* PITCH UTILIZATION */}
       <div className="card">
-        <div style={{ padding:'.6rem 1rem', borderBottom:'1px solid var(--border)', fontSize:11, fontWeight:600, color:'var(--t3)', textTransform:'uppercase', letterSpacing:'.05em' }}>
-          إشغال الملاعب
-        </div>
+        <div style={{ padding:'.6rem 1rem', borderBottom:'1px solid var(--border)', fontSize:11, fontWeight:600, color:'var(--t3)', textTransform:'uppercase', letterSpacing:'.05em' }}>إشغال الملاعب</div>
         <div style={{ padding:'1rem' }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'.5rem' }}>
             <span style={{ fontSize:13, color:'var(--t2)' }}>{pitchUtil.bookedHours} ساعة محجوزة من أصل {pitchUtil.availableHours}</span>
@@ -804,20 +1051,12 @@ function OwnerDashboard({ toast, refresh, branch }) {
 
       {/* DOW CHART + TOP SUBS */}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.75rem', marginBottom:'.75rem' }}>
-        {/* DAY OF WEEK BOOKINGS */}
         <div className="card" style={{ margin:0 }}>
           <div style={{ padding:'.6rem .875rem', borderBottom:'1px solid var(--border)', fontSize:11, fontWeight:600, color:'var(--t3)', textTransform:'uppercase', letterSpacing:'.05em' }}>حجوزات/يوم الأسبوع</div>
           <div style={{ padding:'.75rem .5rem' }}>
-            <BarChart
-              labels={['أح','إث','ثل','أر','خم','جم','سب']}
-              vals={dowData}
-              color='#2563eb'
-              height={100}
-            />
+            <BarChart labels={['أح','إث','ثل','أر','خم','جم','سب']} vals={dowData} color='#2563eb' height={100} />
           </div>
         </div>
-
-        {/* TOP SUBSCRIBERS */}
         <div className="card" style={{ margin:0 }}>
           <div style={{ padding:'.6rem .875rem', borderBottom:'1px solid var(--border)', fontSize:11, fontWeight:600, color:'var(--t3)', textTransform:'uppercase', letterSpacing:'.05em' }}>أعلى اشتراكات</div>
           {topSubs.length === 0 ? <div className="empty" style={{ padding:'1rem' }}>لا بيانات</div> :
@@ -833,34 +1072,6 @@ function OwnerDashboard({ toast, refresh, branch }) {
         </div>
       </div>
 
-      {/* EXPIRING SOON */}
-      {expiringSoon.length > 0 && (
-        <div className="card" style={{ borderColor:'var(--orange)' }}>
-          <div style={{ padding:'.6rem 1rem', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <span style={{ fontSize:11, fontWeight:600, color:'var(--orange)' }}>⚠️ اشتراكات تنتهي قريباً</span>
-            <div style={{ display:'flex', gap:6 }}>
-              <span className="badge badge-r" style={{ fontSize:10 }}>هذا الأسبوع: {expiringSoon.filter(s=>daysBetween(TODAY,s.end_date)<=7).length}</span>
-              <span className="badge badge-o" style={{ fontSize:10 }}>الأسبوع القادم: {expiringSoon.filter(s=>{const d=daysBetween(TODAY,s.end_date);return d>7&&d<=14}).length}</span>
-            </div>
-          </div>
-          {expiringSoon.map(s => {
-            const days = daysBetween(TODAY, s.end_date)
-            return (
-              <div key={s.id} className="list-row">
-                <div className="list-left">
-                  <div className="list-av list-av-yellow">{s.name[0]}</div>
-                  <div>
-                    <div className="list-name">{s.name}</div>
-                    <div className="list-sub">ينتهي {s.end_date}{s.guardian_phone?` · 📞 ${s.guardian_phone}`:''}</div>
-                  </div>
-                </div>
-                <span className={`badge ${days<=3?'badge-r':days<=7?'badge-o':'badge-y'}`} style={{ fontSize:10 }}>{days} أيام</span>
-              </div>
-            )
-          })}
-        </div>
-      )}
-
       {/* ARCHIVE */}
       <div className="sec">الأرشيف</div>
       <div style={{ display:'flex', gap:'.4rem', overflowX:'auto', marginBottom:'.5rem', scrollbarWidth:'none' }}>
@@ -870,37 +1081,46 @@ function OwnerDashboard({ toast, refresh, branch }) {
       </div>
       <div className="month-bar" style={{ marginBottom:'.5rem' }}>
         <select className="month-select" value={archiveMonth} onChange={e => setArchiveMonth(e.target.value)}>
-          <option value="all">كل الأشهر</option>
           {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
         </select>
       </div>
       <div className="card">
-        {loading ? <div className="loading">جاري التحميل...</div> : (() => {
-          let filtered = archive
-          if (archiveFilter !== 'all') filtered = filtered.filter(i => i._type === archiveFilter)
-          if (archiveMonth !== 'all') filtered = filtered.filter(i => {
-            const d = i.date || i.created_at || i.start_date || ''
-            return d.startsWith(archiveMonth)
-          })
-          return filtered.length === 0 ? <div className="empty"><div className="empty-icon">📁</div>لا يوجد سجلات</div> :
-            filtered.map((item,i) => (
-              <div key={i} className="list-row">
+        {archiveLoading && archive.length === 0 ? <div className="loading">جاري التحميل...</div> :
+          archiveShown.length === 0 ? <div className="empty"><div className="empty-icon">📁</div>لا يوجد سجلات</div> :
+            archiveShown.map(item => (
+              <div key={item._type+item.id} className="list-row" style={{ alignItems:'flex-start' }}>
                 <div className="list-left">
                   <div style={{ fontSize:18, width:36, textAlign:'center', flexShrink:0 }}>{typeIcon[item._type]}</div>
                   <div>
                     <div className="list-name">{item._desc}</div>
                     <div className="list-sub">{item._label} · {item._meta}</div>
+                    {item.status==='cancelled' && <div className="list-sub" style={{ color:'var(--red)' }}>ملغي{item.cancelled_at?` · ${fmtDay(item.cancelled_at)}`:''}{item.cancel_reason?` · ${item.cancel_reason}`:''}</div>}
+                    {item.status==='approved' && item.approved_at && <div style={{ fontSize:9, color:'var(--t3)', marginTop:1 }}>اعتُمد {fmtDay(item.approved_at)}</div>}
                     {item.receipt_url && <a href={item.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
                   </div>
                 </div>
                 <div className="list-right">
-                  <span className={`badge ${item.status==='approved'?'badge-g':'badge-r'}`}>{fmt(item._amount)} ر</span>
-                  <span style={{ fontSize:9, color:'var(--t3)', marginTop:2 }}>{item.status==='approved'?'معتمد':'مرفوض'}</span>
+                  <span className={`badge ${item.status==='approved'?'badge-g':item.status==='cancelled'?'badge-grey':'badge-r'}`}>{fmt(item._amount)} ر</span>
+                  <span style={{ fontSize:9, color:'var(--t3)', marginTop:2 }}>{statusLabel[item.status]||item.status}</span>
+                  {item.status==='approved' && (
+                    <div style={{ display:'flex', gap:4, marginTop:4 }}>
+                      {item._type==='subscriber' && <button onClick={() => setCorrRec(item)} style={{ ...tiny, background:'var(--surface2)', border:'1px solid var(--border)', color:'var(--t2)' }}>تصحيح المبلغ</button>}
+                      <button onClick={() => setReasonFor({ mode:'cancel', item })} style={{ ...tiny, background:'var(--red-l)', border:'1px solid var(--red-m)', color:'var(--red)' }}>إلغاء</button>
+                    </div>
+                  )}
                 </div>
               </div>
-            ))
-        })()}
+            ))}
       </div>
+
+      <ReasonModal open={!!reasonFor} onClose={() => setReasonFor(null)} onConfirm={confirmReason}
+        tone={reasonFor?.mode === 'cancel' ? 'danger' : 'warn'}
+        title={reasonFor?.mode === 'cancel' ? `إلغاء: ${reasonFor?.item?._desc || ''}` : `إرجاع للتعديل: ${reasonFor?.item?._desc || ''}`}
+        hint={reasonFor?.mode === 'cancel'
+          ? 'يختفي من القوائم ولا يُحسب في الإيرادات، ويبقى في الأرشيف كملغي مع السبب. وإن كان فيه طقم أو ماء يرجع للمخزون.'
+          : 'تعود البطاقة لمن أدخلها مع السبب ليصححها ويعيد إرسالها، ولا تُحسب في الإيرادات حتى تعتمدها.'}
+        confirmLabel={reasonFor?.mode === 'cancel' ? 'تأكيد الإلغاء' : 'إرجاع للتعديل'} />
+      <CorrectionModal rec={corrRec} onClose={() => setCorrRec(null)} onDone={() => { load(month); loadArchive(archiveMonth) }} toast={toast} />
     </div>
   )
 }
@@ -913,54 +1133,18 @@ function OwnerAcademy({ toast, refresh, branch }) {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
   const [loading, setLoading] = useState(true)
-  const [breaks, setBreaks] = useState([])
-  const [breakForm, setBreakForm] = useState({ reason:'', startDate:TODAY, endDate:'' })
-  const [addingBreak, setAddingBreak] = useState(false)
   const [detailSub, setDetailSub] = useState(null)
+  const [corrRec, setCorrRec] = useState(null)
+  const [cancelRec, setCancelRec] = useState(null)
 
-  useEffect(() => {
-    async function load() {
-      const [s, inv, br] = await Promise.all([
-        supabase.from('subscribers').select('*').eq('branch', branch).eq('status','approved').eq('is_current', true).order('created_at',{ascending:false}),
-        supabase.from('inventory').select('*').order('name'),
-        supabase.from('academy_breaks').select('*').eq('branch', branch).order('start_date',{ascending:false}),
-      ])
-      setSubs(s.data||[]); setInventory(inv.data||[]); setBreaks(br.data||[]); setLoading(false)
-    }
-    load()
-  }, [refresh, branch])
-
-  async function addBreak() {
-    if (!breakForm.startDate||!breakForm.endDate||!breakForm.reason) { alert('أكمل جميع الحقول'); return }
-    setAddingBreak(true)
-    const start = new Date(breakForm.startDate), end = new Date(breakForm.endDate)
-    const days = Math.ceil((end-start)/(1000*60*60*24))
-    // Extend all active subscribers end dates by break duration
-    const activeSubs = subs.filter(s => s.end_date && s.end_date >= breakForm.startDate)
-    await Promise.all([
-      supabase.from('academy_breaks').insert({ branch, reason:breakForm.reason, start_date:breakForm.startDate, end_date:breakForm.endDate, created_by:'المالك' }),
-      ...activeSubs.map(s => {
-        const newEnd = new Date(s.end_date)
-        newEnd.setDate(newEnd.getDate()+days)
-        return supabase.from('subscribers').update({ end_date:newEnd.toISOString().slice(0,10) }).eq('id',s.id)
-      })
-    ])
-    toast(`✅ تم تسجيل الإجازة وتمديد ${activeSubs.length} اشتراك بـ ${days} أيام`,'success')
-    setBreakForm({ reason:'', startDate:TODAY, endDate:'' })
-    setAddingBreak(false)
-    const [s2, br2] = await Promise.all([
+  async function load() {
+    const [s, inv] = await Promise.all([
       supabase.from('subscribers').select('*').eq('branch', branch).eq('status','approved').eq('is_current', true).order('created_at',{ascending:false}),
-      supabase.from('academy_breaks').select('*').eq('branch', branch).order('start_date',{ascending:false}),
+      supabase.from('inventory').select('*').order('name'),
     ])
-    setSubs(s2.data||[]); setBreaks(br2.data||[])
+    setSubs((s.data||[]).sort(newestFirst)); setInventory(inv.data||[]); setLoading(false)
   }
-
-  async function deleteBreak(b) {
-    if (!confirm('هل تريد حذف هذه الإجازة؟ لن يتم التراجع عن تمديد الاشتراكات.')) return
-    await supabase.from('academy_breaks').delete().eq('id', b.id)
-    setBreaks(prev => prev.filter(x => x.id !== b.id))
-    toast('تم حذف الإجازة','error')
-  }
+  useEffect(() => { load() }, [refresh, branch])
 
   const expiringSoon = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d!==null && d>=0 && d<=14 })
   const expired = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d!==null && d<0 })
@@ -972,10 +1156,17 @@ function OwnerAcademy({ toast, refresh, branch }) {
   if (filter==='unpaid') filtered = filtered.filter(s => Number(s.balance)>0)
 
   const totalSubRev = subs.reduce((a,s) => a+Number(s.sub_amount||0), 0)
+  const owedTotal = subs.reduce((a,s) => a+Number(s.balance||0), 0)
   const busCount = subs.filter(s => s.has_bus).length
   const kitCount = subs.filter(s => s.has_kit).length
   const kitRev = subs.reduce((a,s) => a+Number(s.kit_amount||0), 0)
   const busRev = subs.reduce((a,s) => a+Number(s.bus_amount||0), 0)
+  const tiny = { fontSize:9, borderRadius:5, padding:'2px 6px', cursor:'pointer', fontFamily:'inherit' }
+
+  async function doCancel(reason) {
+    await cancelRecord('subscriber', cancelRec, reason)
+    setCancelRec(null); toast('تم إلغاء الاشتراك','error'); load()
+  }
 
   return (
     <div className="page">
@@ -989,10 +1180,9 @@ function OwnerAcademy({ toast, refresh, branch }) {
           <div className="kpi-grid">
             <div className="kpi"><div className="kpi-label">إجمالي المشتركين</div><div className="kpi-val">{subs.length}</div><div className="kpi-sub">نشط: {subs.length-expired.length}</div></div>
             <div className="kpi"><div className="kpi-label">قيمة الاشتراكات الحالية</div><div className="kpi-val kpi-val-g">{fmt(totalSubRev)} ر</div></div>
-            {subs.reduce((a,s)=>a+Number(s.balance||0),0)>0 && <div className="kpi"><div className="kpi-label">مبالغ مستحقة</div><div className="kpi-val kpi-val-r">{fmt(subs.reduce((a,s)=>a+Number(s.balance||0),0))} ر</div></div>}
+            {owedTotal>0 && <div className="kpi"><div className="kpi-label">مبالغ مستحقة</div><div className="kpi-val kpi-val-r">{fmt(owedTotal)} ر</div></div>}
             {expiringSoon.length>0 && <div className="kpi kpi-full" style={{ borderColor:'var(--orange)', background:'var(--orange-l)' }}><div className="kpi-label" style={{ color:'var(--orange)' }}>ينتهي قريباً</div><div className="kpi-val" style={{ color:'var(--orange)' }}>{expiringSoon.length} مشترك</div><div className="kpi-sub" style={{ color:'var(--orange)' }}>خلال 14 يوماً</div></div>}
           </div>
-          {/* CATEGORIES PLACEHOLDER */}
           <div className="info-box info-blue" style={{ display:'flex', alignItems:'center', gap:8 }}>
             <span style={{ fontSize:16 }}>📂</span>
             <span>تصنيف الفئات العمرية سيظهر هنا بعد استلام البيانات من مدير الشؤون</span>
@@ -1009,70 +1199,26 @@ function OwnerAcademy({ toast, refresh, branch }) {
             {loading ? <div className="loading">جاري التحميل...</div> : filtered.length===0 ? <div className="empty"><div className="empty-icon">👥</div>لا يوجد مشتركون</div> :
               filtered.map((s,i) => {
                 const st = subStatus(s.end_date)
+                const flags = subscriptionFlags(s, subs)
                 return (
-                  <div key={s.id} className="list-row">
+                  <div key={s.id} className="list-row" style={{ alignItems:'flex-start' }}>
                     <div className="list-left" style={{ cursor:'pointer' }} onClick={() => setDetailSub(s)}>
                       <div className={`list-av ${avColors[i%4]}`}>{s.name[0]}</div>
                       <div style={{ minWidth:0 }}>
                         <div className="list-name">{s.name}</div>
-                        <div className="list-sub">{s.sub_amount>0?`${fmt(s.sub_amount)} ر`:''}{s.has_bus?' · باص':''}{s.has_kit?' · طقم':''}{s.end_date?` · حتى ${s.end_date}`:''}{s.guardian_phone?` · ${s.guardian_phone}`:''}</div>
+                        <div className="list-sub">{s.sub_amount>0?`${fmt(s.sub_amount)} ر`:''}{s.type==='family'?` · عائلة ${s.members_count||''} أفراد`:''}{s.has_bus?' · باص':''}{s.has_kit?' · طقم':''}{s.end_date?` · حتى ${s.end_date}`:''}{s.guardian_phone?` · ${s.guardian_phone}`:''}</div>
+                        {flags.map(t => <div key={t} className="list-sub" style={{ color:'var(--orange)' }}>⚠️ {t}</div>)}
                       </div>
                     </div>
                     <div className="list-right">
                       <div className="list-amt">{fmt(s.total_amount||s.sub_amount)} ر</div>
                       {Number(s.balance)>0 && <div style={{ fontSize:10, color:'var(--red)', fontWeight:600 }}>متبقي {fmt(s.balance)} ر</div>}
                       <span className={`badge ${st.cls}`} style={{ fontSize:9, marginTop:3 }}>{st.label}</span>
-                    </div>
-                  </div>
-                )
-              })}
-                      </div>
-        </>
-      )}
-
-      {tab==='breaks' && (
-        <>
-          <div className="card" style={{ marginBottom:'.75rem' }}>
-            <div style={{ padding:'.875rem 1rem' }}>
-              <div style={{ fontSize:13, fontWeight:700, color:'var(--red)', marginBottom:'.875rem' }}>تسجيل إجازة جديدة</div>
-              <div className="info-box info-blue" style={{ marginBottom:'.75rem' }}>سيتم تمديد اشتراكات جميع المشتركين النشطين تلقائياً بعدد أيام الإجازة.</div>
-              <div className="form-group"><label className="form-label">سبب الإجازة</label>
-                <select className="form-select" value={breakForm.reason} onChange={e => setBreakForm(f=>({...f,reason:e.target.value}))}>
-                  <option value="">اختر السبب</option>
-                  <option>اختبارات مدرسية</option>
-                  <option>عيد الفطر</option>
-                  <option>عيد الأضحى</option>
-                  <option>اليوم الوطني</option>
-                  <option>إجازة رسمية</option>
-                  <option>صيانة</option>
-                  <option>أخرى</option>
-                </select>
-              </div>
-              <div className="form-row">
-                <div className="form-group"><label className="form-label">تاريخ البداية</label><input className="form-input" type="date" value={breakForm.startDate} onChange={e => setBreakForm(f=>({...f,startDate:e.target.value}))}/></div>
-                <div className="form-group"><label className="form-label">تاريخ الانتهاء</label><input className="form-input" type="date" value={breakForm.endDate} onChange={e => setBreakForm(f=>({...f,endDate:e.target.value}))}/></div>
-              </div>
-              {breakForm.startDate&&breakForm.endDate&&<div style={{ fontSize:12, color:'var(--orange)', marginBottom:'.5rem' }}>
-                مدة الإجازة: {Math.ceil((new Date(breakForm.endDate)-new Date(breakForm.startDate))/(1000*60*60*24))} أيام · سيتم تمديد {subs.filter(s=>s.end_date&&s.end_date>=breakForm.startDate).length} اشتراك
-              </div>}
-              <button className="btn-primary" disabled={addingBreak} onClick={addBreak}>{addingBreak?'جاري التسجيل...':'تسجيل الإجازة وتمديد الاشتراكات'}</button>
-            </div>
-          </div>
-          <div className="sec">سجل الإجازات</div>
-          <div className="card">
-            {breaks.length===0?<div className="empty"><div className="empty-icon">📅</div>لا يوجد إجازات مسجلة</div>:
-              breaks.map(b => {
-                const days = Math.ceil((new Date(b.end_date)-new Date(b.start_date))/(1000*60*60*24))
-                return (
-                  <div key={b.id} className="list-row">
-                    <div className="list-left">
-                      <div className="list-av list-av-yellow">🏖</div>
-                      <div>
-                        <div className="list-name">{b.reason}</div>
-                        <div className="list-sub">{b.start_date} → {b.end_date} · {days} أيام</div>
+                      <div style={{ display:'flex', gap:4, marginTop:4 }}>
+                        <button onClick={() => setCorrRec(s)} style={{ ...tiny, background:'var(--surface2)', border:'1px solid var(--border)', color:'var(--t2)' }}>تصحيح المبلغ</button>
+                        <button onClick={() => setCancelRec(s)} style={{ ...tiny, background:'var(--red-l)', border:'1px solid var(--red-m)', color:'var(--red)' }}>إلغاء</button>
                       </div>
                     </div>
-                    <button onClick={() => deleteBreak(b)} style={{ fontSize:10, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:6, padding:'3px 8px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit' }}>حذف</button>
                   </div>
                 )
               })}
@@ -1094,6 +1240,11 @@ function OwnerAcademy({ toast, refresh, branch }) {
       )}
 
       <SubscriberDetail sub={detailSub} onClose={() => setDetailSub(null)}/>
+      <CorrectionModal rec={corrRec} onClose={() => setCorrRec(null)} onDone={load} toast={toast} />
+      <ReasonModal open={!!cancelRec} onClose={() => setCancelRec(null)} onConfirm={doCancel} tone="danger"
+        title={`إلغاء اشتراك: ${cancelRec?.name || ''}`}
+        hint="يختفي من القوائم ولا تُحسب دفعاته في الإيرادات، ويبقى في الأرشيف كملغي مع السبب. إن كان تجديداً يعود الاشتراك السابق حالياً، وإن كان فيه طقم يرجع للمخزون."
+        confirmLabel="تأكيد الإلغاء" />
     </div>
   )
 }
@@ -1415,39 +1566,57 @@ function SubPricingForm({ f, setF, BUS_PRICES, inventory }) {
   const t = subTotals(f)
   const kitRows = (inventory || []).filter(r => r.name === f.kitItem).sort((a, b) => (a.sort_order || 99) - (b.sort_order || 99))
   const months = t.months
+  const members = famCount(f)
   const totalPaid = Number(f.cashAmt || 0) + Number(f.networkAmt || 0) + Number(f.transferAmt || 0)
   const remaining = t.total - totalPaid
   const box = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '.75rem', marginBottom: '.5rem' }
   const quick = { flex: 1, fontSize: 11, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 0', color: 'var(--t2)', cursor: 'pointer', fontFamily: 'inherit' }
+  const baseLabel = f.isPkg && months === 3
+    ? `باقة ${PKG3_PRICE} ر${members > 1 ? ` × ${members} أفراد` : ''}`
+    : `300 ر × ${months} ${months === 1 ? 'شهر' : 'أشهر'}${members > 1 ? ` × ${members} أفراد` : ''} = ${fmt(t.subBase)} ر`
 
   return (
     <>
-      {/* 3 MONTH PACKAGE */}
-      <div className="form-group">
-        <div className="water-toggle" onClick={() => setF(ff => ({ ...ff, isPkg: !ff.isPkg, subOverride: '', endDate: !ff.isPkg ? calcEnd(ff.startDate, 3) : ff.endDate }))}>
-          <div className="water-toggle-left"><span style={{ fontSize: 18 }}>⭐</span><div><div style={{ fontSize: 13, fontWeight: 500, color: 'var(--t1)' }}>باقة {PKG3_PRICE} ر (3 أشهر)</div><div style={{ fontSize: 11, color: 'var(--t3)' }}>سعر ثابت · يمكن إضافة طقم أو باص</div></div></div>
-          <div className={`toggle-switch ${f.isPkg ? 'toggle-on' : ''}`} />
+      {f.type === 'family' && (
+        <div className="form-group">
+          <label className="form-label">عدد أفراد العائلة</label>
+          <input className="form-input" type="number" min="2" max="12" value={f.members} onChange={e => setF(ff => ({ ...ff, members: e.target.value, subOverride: '' }))} />
         </div>
-      </div>
+      )}
 
-      {/* DATES */}
+      {/* START DATE + NUMBER OF MONTHS (the end date fills in and can still be changed) */}
       <div className="form-row">
         <div className="form-group">
           <label className="form-label">تاريخ البداية</label>
-          <input className="form-input" type="date" value={f.startDate} onChange={e => setF(ff => ({ ...ff, startDate: e.target.value, subOverride: '', endDate: ff.isPkg ? calcEnd(e.target.value, 3) : ff.endDate }))} />
+          <input className="form-input" type="date" value={f.startDate} onChange={e => setF(ff => ({ ...ff, startDate: e.target.value, endDate: calcEnd(e.target.value, ff.months) }))} />
         </div>
         <div className="form-group">
-          <label className="form-label">تاريخ الانتهاء</label>
-          <input className="form-input" type="date" value={f.endDate} onChange={e => setF(ff => ({ ...ff, endDate: e.target.value, subOverride: '' }))} readOnly={f.isPkg} />
+          <label className="form-label">عدد الأشهر</label>
+          <select className="form-select" value={f.months} onChange={e => { const m = Number(e.target.value); setF(ff => ({ ...ff, months: m, isPkg: m === 3 ? ff.isPkg : false, subOverride: '', endDate: calcEnd(ff.startDate, m) })) }}>
+            {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
         </div>
       </div>
-      <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: -8, marginBottom: 8, textAlign: 'center' }}>{months} {months === 1 ? 'شهر' : 'أشهر'}</div>
+      <div className="form-group">
+        <label className="form-label">تاريخ الانتهاء (يمكن تعديله)</label>
+        <input className="form-input" type="date" value={f.endDate} onChange={e => setF(ff => ({ ...ff, endDate: e.target.value }))} />
+      </div>
+
+      {/* 3 MONTH PACKAGE: only when 3 months is chosen */}
+      {months === 3 && (
+        <div className="form-group">
+          <div className="water-toggle" onClick={() => setF(ff => ({ ...ff, isPkg: !ff.isPkg, subOverride: '' }))}>
+            <div className="water-toggle-left"><span style={{ fontSize: 18 }}>⭐</span><div><div style={{ fontSize: 13, fontWeight: 500, color: 'var(--t1)' }}>باقة {PKG3_PRICE} ر (3 أشهر)</div><div style={{ fontSize: 11, color: 'var(--t3)' }}>بدونها سعر 3 أشهر كاملاً {fmt(900 * members)} ر</div></div></div>
+            <div className={`toggle-switch ${f.isPkg ? 'toggle-on' : ''}`} />
+          </div>
+        </div>
+      )}
 
       {/* SUBSCRIPTION LINE */}
       <div style={box}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--t1)' }}>الاشتراك</span>
-          <span style={{ fontSize: 12, color: 'var(--t3)' }}>{f.isPkg ? `باقة ${PKG3_PRICE} ر` : `300 ر × ${months} = ${fmt(t.subBase)} ر`}</span>
+          <span style={{ fontSize: 12, color: 'var(--t3)' }}>{baseLabel}</span>
         </div>
         <LineAmount f={f} setF={setF} ovKey="subOverride" base={t.subBase} finalVal={t.subFinal} color="var(--red)" />
       </div>
@@ -1475,7 +1644,7 @@ function SubPricingForm({ f, setF, BUS_PRICES, inventory }) {
                 <label className="form-label">المقاس</label>
                 <select className="form-select" value={f.kitSize} onChange={e => setF(ff => ({ ...ff, kitSize: e.target.value }))}>
                   <option value="">اختر المقاس</option>
-                  {kitRows.map(r => <option key={r.id} value={r.size} disabled={r.stock <= 0}>{r.size} (متبقي {r.stock})</option>)}
+                  {kitRows.map(r => <option key={r.id} value={r.size} disabled={r.stock <= 0 && r.size !== f.kitSize}>{r.size} (متبقي {r.stock})</option>)}
                 </select>
               </div>
             </div>
@@ -1503,7 +1672,7 @@ function SubPricingForm({ f, setF, BUS_PRICES, inventory }) {
                 </select>
               </div>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">عدد الأشهر</label>
+                <label className="form-label">عدد أشهر الباص</label>
                 <input className="form-input" type="number" min="1" max="12" value={f.busMonths} onChange={e => setF(ff => ({ ...ff, busMonths: parseInt(e.target.value) || 1, busOverride: '' }))} />
               </div>
             </div>
@@ -1530,8 +1699,8 @@ function SubPricingForm({ f, setF, BUS_PRICES, inventory }) {
           <div className="form-group" style={{ marginBottom: 0 }}><label className="form-label">💳 شبكة</label><input className="form-input" type="number" min="0" value={f.networkAmt || ''} placeholder="0" onChange={e => setF(ff => ({ ...ff, networkAmt: e.target.value }))} /></div>
           <div className="form-group" style={{ marginBottom: 0 }}><label className="form-label">📱 تحويل</label><input className="form-input" type="number" min="0" value={f.transferAmt || ''} placeholder="0" onChange={e => setF(ff => ({ ...ff, transferAmt: e.target.value }))} /></div>
         </div>
-        {Number(f.networkAmt) > 0 && <ReceiptUpload label="إيصال الشبكة" folder="subscribers" onUploaded={url => setF(ff => ({ ...ff, networkReceipt: url }))} />}
-        {Number(f.transferAmt) > 0 && <ReceiptUpload label="إيصال التحويل" folder="subscribers" onUploaded={url => setF(ff => ({ ...ff, transferReceipt: url }))} />}
+        {Number(f.networkAmt) > 0 && <ReceiptUpload label="إيصال الشبكة" folder="subscribers" current={f.networkReceipt} onUploaded={url => setF(ff => ({ ...ff, networkReceipt: url }))} />}
+        {Number(f.transferAmt) > 0 && <ReceiptUpload label="إيصال التحويل" folder="subscribers" current={f.transferReceipt} onUploaded={url => setF(ff => ({ ...ff, transferReceipt: url }))} />}
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginTop: 4 }}>
           <span style={{ color: 'var(--t3)' }}>المدفوع: {fmt(totalPaid)} ر</span>
           <span style={{ color: remaining <= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
@@ -1546,69 +1715,92 @@ function SubPricingForm({ f, setF, BUS_PRICES, inventory }) {
 
 // ============ STAFF SUBS ============
 function StaffSubs({ toast, refresh, branch }) {
+  const BUS_PRICES = [150,200,250,300,350,400,450,500,550,600,650,700,750]
+  const createdBy = ROLES[branch==='jazan'?'admin_jazan':'admin_riyadh']?.label
+  const emptyForm = () => ({ ...blankPricing, name:'', phone:'', startDate:TODAY, endDate:calcEnd(TODAY,1) })
   const [subs, setSubs] = useState([])
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(false)
+  const [form, setForm] = useState(emptyForm())
+  const [resendRec, setResendRec] = useState(null)        // a returned subscription being fixed
   const [renewModal, setRenewModal] = useState(false)
   const [renewSub, setRenewSub] = useState(null)
+  const [renewForm, setRenewForm] = useState(emptyForm())
   const [editModal, setEditModal] = useState(false)
   const [editSub, setEditSub] = useState(null)
-  const [editForm, setEditForm] = useState({ name:'', phone:'', startDate:'', endDate:'', pkg:300 })
-  const BUS_PRICES = [150,200,250,300,350,400,450,500,550,600,650,700,750]
-  const emptyForm = { name:'', type:'individual', phone:'', startDate:TODAY, endDate:calcEnd(TODAY,1), ...blankPricing }
-  const [form, setForm] = useState(emptyForm)
-  const [renewForm, setRenewForm] = useState({ startDate:TODAY, endDate:calcEnd(TODAY,1), ...blankPricing })
+  const [editForm, setEditForm] = useState({ name:'', phone:'', startDate:'', endDate:'' })
   const [detailSub, setDetailSub] = useState(null)
   const [payTarget, setPayTarget] = useState(null)
   const [inventory, setInventory] = useState([])
-  const createdBy = ROLES[branch==='jazan'?'admin_jazan':'admin_riyadh']?.label
   const [freezeModal, setFreezeModal] = useState(false)
   const [freezeSub, setFreezeSub] = useState(null)
   const [freezeDays, setFreezeDays] = useState(7)
   const [subsTab, setSubsTab] = useState('subs')
   const [breaks, setBreaks] = useState([])
-  const [breakForm, setBreakForm] = useState({ reason:'', startDate:TODAY, endDate:'' })
+  const [breakForm, setBreakForm] = useState({ reason:'', lastDay:'', resumeDay:'' })
+  const [breakPreview, setBreakPreview] = useState(null)
+  const [previewOpen, setPreviewOpen] = useState(false)
   const [addingBreak, setAddingBreak] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
   async function load() {
     const [s, br, inv] = await Promise.all([
       supabase.from('subscribers').select('*').eq('branch', branch).order('created_at',{ascending:false}),
-      supabase.from('academy_breaks').select('*').eq('branch', branch).order('start_date',{ascending:false}),
+      supabase.from('academy_breaks').select('*').eq('branch', branch).order('created_at',{ascending:false}),
       supabase.from('inventory').select('*').in('name',['طقم صيفي (جيرسي + شورت)','طقم شتوي']),
     ])
-    setSubs((s.data||[]).filter(x=>x.is_current!==false)); setBreaks(br.data||[]); setInventory(inv.data||[]); setLoading(false)
+    setSubs((s.data||[]).filter(x=>x.is_current!==false).sort(newestFirst)); setBreaks(br.data||[]); setInventory(inv.data||[]); setLoading(false)
   }
   useEffect(() => { load() }, [refresh, branch])
 
-  async function addBreak() {
-    if (!breakForm.startDate||!breakForm.endDate||!breakForm.reason) { alert('أكمل جميع الحقول'); return }
-    const days = Math.ceil((new Date(breakForm.endDate)-new Date(breakForm.startDate))/(1000*60*60*24))
-    const activeSubs = subs.filter(s => s.status==='approved'&&s.end_date&&s.end_date>=breakForm.startDate)
+  const approvedSubs = subs.filter(s => s.status==='approved')
+  const pendingSubs = subs.filter(s => s.status==='pending')
+  const returnedSubs = subs.filter(s => s.status==='returned' && s.created_by===createdBy)
+
+  // ---------- academy break: last operating day and first day back ----------
+  const closedDays = breakForm.lastDay && breakForm.resumeDay
+    ? Math.round((new Date(breakForm.resumeDay) - new Date(breakForm.lastDay)) / 86400000) - 1 : 0
+
+  function previewBreak() {
+    if (!breakForm.reason) { alert('اختر سبب الإجازة'); return }
+    if (!breakForm.lastDay || !breakForm.resumeDay) { alert('أدخل آخر يوم عمل وأول يوم عمل بعد الإجازة'); return }
+    if (closedDays < 1) { alert('أول يوم عمل بعد الإجازة يجب أن يكون بعد آخر يوم عمل بيومين على الأقل'); return }
+    // a subscription that had not ended on the last operating day gets the closed days back
+    const affected = approvedSubs.filter(s => s.end_date && s.end_date > breakForm.lastDay)
+      .map(s => ({ id:s.id, name:s.name, old_end:s.end_date, new_end:addDaysStr(s.end_date, closedDays) }))
+    setBreakPreview({ ...breakForm, closedDays, affected }); setPreviewOpen(false)
+  }
+
+  async function confirmBreak() {
+    const pv = breakPreview
     setAddingBreak(true)
-    await Promise.all([
-      supabase.from('academy_breaks').insert({ branch, reason:breakForm.reason, start_date:breakForm.startDate, end_date:breakForm.endDate, created_by:ROLES[branch==='jazan'?'admin_jazan':'admin_riyadh']?.label }),
-      ...activeSubs.map(s => {
-        const newEnd = new Date(s.end_date); newEnd.setDate(newEnd.getDate()+days)
-        return supabase.from('subscribers').update({ end_date:newEnd.toISOString().slice(0,10) }).eq('id',s.id)
-      })
-    ])
-    toast(`✅ تم تسجيل الإجازة وتمديد ${activeSubs.length} اشتراك بـ ${days} أيام`,'success')
-    setBreakForm({ reason:'', startDate:TODAY, endDate:'' })
-    setAddingBreak(false); load()
+    const { error } = await supabase.from('academy_breaks').insert({
+      branch, reason:pv.reason, last_day:pv.lastDay, resume_day:pv.resumeDay, closed_days:pv.closedDays,
+      start_date:addDaysStr(pv.lastDay,1), end_date:addDaysStr(pv.resumeDay,-1), changes:pv.affected, created_by:createdBy
+    })
+    if (error) { setAddingBreak(false); toast('خطأ في الحفظ','error'); console.error(error); return }
+    await Promise.all(pv.affected.map(a => supabase.from('subscribers').update({ end_date:a.new_end }).eq('id', a.id)))
+    setAddingBreak(false)
+    toast(`✅ تم تمديد ${pv.affected.length} اشتراك بمقدار ${pv.closedDays} أيام`,'success')
+    setBreakForm({ reason:'', lastDay:'', resumeDay:'' }); setBreakPreview(null); load()
   }
 
+  // deleting a break puts every subscriber back to the end date he had before it
   async function deleteBreak(b) {
-    if (!confirm('هل تريد حذف هذه الإجازة؟')) return
+    if (!confirm('سيعود تاريخ انتهاء المشتركين الذين مُدّدوا في هذه الإجازة كما كان. متابعة؟')) return
+    const ch = Array.isArray(b.changes) ? b.changes : []
+    await Promise.all(ch.map(a => supabase.from('subscribers').update({ end_date:a.old_end }).eq('id', a.id).eq('end_date', a.new_end)))
     await supabase.from('academy_breaks').delete().eq('id', b.id)
-    toast('تم حذف الإجازة','error'); load()
+    toast('تم حذف الإجازة وإرجاع التواريخ','error'); load()
   }
 
+  // ---------- adding, renewing and fixing a subscription ----------
   function validatePayment(f) {
     const t = subTotals(f)
     const cash = Number(f.cashAmt || 0), net = Number(f.networkAmt || 0), tr = Number(f.transferAmt || 0)
+    if (f.type === 'family' && famCount(f) < 2) { alert('أدخل عدد أفراد العائلة'); return null }
     if (cash + net + tr > t.total) { alert('المدفوع أكبر من الإجمالي'); return null }
     if (net > 0 && !f.networkReceipt) { alert('يجب رفع إيصال الشبكة'); return null }
     if (tr > 0 && !f.transferReceipt) { alert('يجب رفع إيصال التحويل'); return null }
@@ -1624,6 +1816,7 @@ function StaffSubs({ toast, refresh, branch }) {
     const { t, cash, net, tr, paid } = v
     const methods = [cash > 0 && 'نقدي', net > 0 && 'شبكة', tr > 0 && 'تحويل'].filter(Boolean)
     return {
+      type: f.type, members_count: famCount(f),
       package: t.subFinal, sub_amount: t.subFinal, bus_amount: t.busFinal, kit_amount: t.kitFinal, other_amount: 0,
       total_amount: t.total, months: t.months,
       discount_given: t.discountGiven,
@@ -1640,6 +1833,11 @@ function StaffSubs({ toast, refresh, branch }) {
       ...extra
     }
   }
+  const paymentParts = (f, v) => [
+    { method: 'نقدي', amount: v.cash },
+    { method: 'شبكة', amount: v.net, receipt: f.networkReceipt },
+    { method: 'تحويل', amount: v.tr, receipt: f.transferReceipt },
+  ]
 
   // every subscription period is its own record; payments are stored separately
   async function savePeriod(f, v, extra) {
@@ -1647,36 +1845,56 @@ function StaffSubs({ toast, refresh, branch }) {
     const { data, error } = await supabase.from('subscribers').insert(subRow(f, v, { id, member_id: id, ...extra })).select().single()
     if (error) return { error }
     if (f.includeKit) await supabase.rpc('adjust_inventory', { p_name: f.kitItem, p_size: f.kitSize, p_qty: -1 })
-    const res = await insertInitialPayments({
-      branch, type: 'subscriber', rec: data, label: data.name, createdBy,
-      parts: [
-        { method: 'نقدي', amount: v.cash },
-        { method: 'شبكة', amount: v.net, receipt: f.networkReceipt },
-        { method: 'تحويل', amount: v.tr, receipt: f.transferReceipt },
-      ]
-    })
+    const res = await insertInitialPayments({ branch, type: 'subscriber', rec: data, label: data.name, createdBy, parts: paymentParts(f, v) })
     return { error: res.error }
   }
+
+  function openAdd() { setResendRec(null); setForm(emptyForm()); setModal(true) }
+  function closeAdd() { setModal(false); setResendRec(null) }
 
   async function submit() {
     if (!form.name.trim()) { alert('أدخل الاسم'); return }
     if (!form.startDate || !form.endDate) { alert('أدخل تاريخ البداية والانتهاء'); return }
     const v = validatePayment(form); if (!v) return
     setSubmitting(true)
-    const { error } = await savePeriod(form, v, { name: form.name.trim(), type: form.type, guardian_phone: form.phone || null })
+    const { error } = await savePeriod(form, v, { name: form.name.trim(), guardian_phone: form.phone || null })
     setSubmitting(false)
     if (error) { toast('خطأ في الحفظ', 'error'); console.error(error); return }
     toast('✅ تم الحفظ بنجاح', 'success')
-    setModal(false); setForm(emptyForm); load()
+    closeAdd(); setForm(emptyForm()); load()
+  }
+
+  // the owner returned it: open the same form, already filled in
+  async function openResend(rec) {
+    const { data: pays } = await supabase.from('payments').select('*').eq('record_type','subscriber').eq('record_id', String(rec.id)).eq('kind','initial')
+    setResendRec(rec); setForm(formFromSub(rec, pays || [])); setModal(true)
+  }
+
+  async function resend() {
+    if (!form.name.trim()) { alert('أدخل الاسم'); return }
+    if (!form.startDate || !form.endDate) { alert('أدخل تاريخ البداية والانتهاء'); return }
+    const v = validatePayment(form); if (!v) return
+    setSubmitting(true)
+    const { error } = await supabase.from('subscribers').update(
+      subRow(form, v, { name: form.name.trim(), guardian_phone: form.phone || null, return_reason: null, returned_at: null })
+    ).eq('id', resendRec.id)
+    if (!error) {
+      await supabase.from('payments').delete().eq('record_type','subscriber').eq('record_id', String(resendRec.id)).eq('kind','initial')
+      if (form.includeKit) await supabase.rpc('adjust_inventory', { p_name: form.kitItem, p_size: form.kitSize, p_qty: -1 })
+      await insertInitialPayments({ branch, type: 'subscriber', rec: { id: resendRec.id, total_amount: v.t.total, bus_amount: v.t.busFinal, kit_amount: v.t.kitFinal },
+        label: form.name.trim(), createdBy, parts: paymentParts(form, v) })
+    }
+    setSubmitting(false)
+    if (error) { toast('خطأ في الحفظ', 'error'); console.error(error); return }
+    toast('✅ أُعيد الإرسال للمالك', 'success')
+    closeAdd(); setForm(emptyForm()); load()
   }
 
   async function freezeSubscriber() {
     if (!freezeSub || !freezeDays) return
-    const newEnd = new Date(freezeSub.end_date)
-    newEnd.setDate(newEnd.getDate() + Number(freezeDays))
     await supabase.from('subscribers').update({
       is_frozen: true, freeze_days: Number(freezeDays),
-      freeze_start: TODAY, end_date: newEnd.toISOString().slice(0, 10)
+      freeze_start: TODAY, end_date: addDaysStr(freezeSub.end_date, Number(freezeDays))
     }).eq('id', freezeSub.id)
     toast('✅ تم تجميد الاشتراك وتمديد التاريخ', 'success')
     setFreezeModal(false); setFreezeSub(null); load()
@@ -1686,7 +1904,7 @@ function StaffSubs({ toast, refresh, branch }) {
   function openRenew(s) {
     const start = s.end_date && s.end_date >= TODAY ? s.end_date : TODAY
     setRenewSub(s)
-    setRenewForm({ startDate: start, endDate: calcEnd(start, 1), ...blankPricing })
+    setRenewForm({ ...blankPricing, startDate: start, endDate: calcEnd(start, 1), type: s.type === 'family' ? 'family' : 'individual', members: s.members_count || 1 })
     setRenewModal(true)
   }
 
@@ -1696,7 +1914,7 @@ function StaffSubs({ toast, refresh, branch }) {
     const v = validatePayment(renewForm); if (!v) return
     setSubmitting(true)
     const { error } = await savePeriod(renewForm, v, {
-      name: renewSub.name, type: renewSub.type, guardian_phone: renewSub.guardian_phone || null,
+      name: renewSub.name, guardian_phone: renewSub.guardian_phone || null,
       member_id: renewSub.member_id || String(renewSub.id), renewal_of: String(renewSub.id)
     })
     setSubmitting(false)
@@ -1708,28 +1926,25 @@ function StaffSubs({ toast, refresh, branch }) {
   async function saveEdit() {
     if (!editSub) return
     setSubmitting(true)
-    const updateData = {
-      name: editForm.name,
-      guardian_phone: editForm.phone||null,
-      start_date: editForm.startDate||null,
-      end_date: editForm.endDate||null,
-    }
-    await supabase.from('subscribers').update(updateData).eq('id', editSub.id)
+    await supabase.from('subscribers').update({
+      name: editForm.name, guardian_phone: editForm.phone||null,
+      start_date: editForm.startDate||null, end_date: editForm.endDate||null,
+    }).eq('id', editSub.id)
     setSubmitting(false)
     toast('✅ تم التعديل بنجاح','success')
     setEditModal(false); setEditSub(null); load()
   }
 
+  // only a card that has not been approved can be deleted
   async function deleteSub(s) {
     if (!confirm(`هل تريد حذف "${s.name}"؟`)) return
-    if (s.has_kit && s.kit_item) await supabase.rpc('adjust_inventory', { p_name: s.kit_item, p_size: s.kit_size || '', p_qty: 1 })
+    // a returned card already gave its kit back to the stock
+    if (s.status==='pending' && s.has_kit && s.kit_item) await supabase.rpc('adjust_inventory', { p_name: s.kit_item, p_size: s.kit_size || '', p_qty: 1 })
     await supabase.from('payments').delete().eq('record_type','subscriber').eq('record_id', String(s.id))
     await supabase.from('subscribers').delete().eq('id', s.id)
     toast('تم الحذف','error'); load()
   }
 
-  const approvedSubs = subs.filter(s => s.status==='approved')
-  const pendingSubs = subs.filter(s => s.status==='pending')
   const expiringSoon = approvedSubs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d!==null && d>=0 && d<=14 })
   const expired = approvedSubs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d!==null && d<0 })
   let filtered = search ? approvedSubs.filter(s => s.name.includes(search)) : approvedSubs
@@ -1741,6 +1956,7 @@ function StaffSubs({ toast, refresh, branch }) {
   const totalRev = approvedSubs.reduce((a,s) => a+Number(s.sub_amount||0), 0)
   const owedTotal = approvedSubs.reduce((a,s) => a+Number(s.balance||0), 0)
   if (filter==='unpaid') filtered = filtered.filter(s => Number(s.balance)>0)
+  const btn = (bg, bd, c) => ({ fontSize:9, background:bg, border:`1px solid ${bd}`, borderRadius:5, padding:'2px 6px', color:c, cursor:'pointer', fontFamily:'inherit' })
 
   return (
     <div className="page">
@@ -1749,7 +1965,7 @@ function StaffSubs({ toast, refresh, branch }) {
         <div className="strip-item"><div className="strip-label">الإجمالي</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(totalRev)} ر</div></div>
         {owedTotal>0 && <div className="strip-item"><div className="strip-label">مستحقات</div><div className="strip-val" style={{ color:'var(--red)' }}>{fmt(owedTotal)} ر</div></div>}
         {pendingSubs.length>0 && <div className="strip-item"><div className="strip-label">معلق</div><div className="strip-val" style={{ color:'var(--orange)' }}>{pendingSubs.length}</div></div>}
-        {expiringSoon.length>0 && <div className="strip-item"><div className="strip-label">ينتهي قريباً</div><div className="strip-val" style={{ color:'var(--orange)' }}>{expiringSoon.length}</div></div>}
+        {returnedSubs.length>0 && <div className="strip-item"><div className="strip-label">أُعيد</div><div className="strip-val" style={{ color:'var(--orange)' }}>{returnedSubs.length}</div></div>}
       </div>
 
       <div className="inner-tabs">
@@ -1762,35 +1978,58 @@ function StaffSubs({ toast, refresh, branch }) {
           <div className="card" style={{ marginBottom:'.75rem' }}>
             <div style={{ padding:'.875rem 1rem' }}>
               <div style={{ fontSize:13, fontWeight:700, color:'var(--red)', marginBottom:'.875rem' }}>تسجيل إجازة جديدة</div>
-              <div className="info-box info-blue" style={{ marginBottom:'.75rem' }}>سيتم تمديد اشتراكات جميع المشتركين النشطين تلقائياً بعدد أيام الإجازة.</div>
               <div className="form-group">
                 <label className="form-label">سبب الإجازة</label>
-                <select className="form-select" value={breakForm.reason} onChange={e => setBreakForm(f=>({...f,reason:e.target.value}))}>
+                <select className="form-select" value={breakForm.reason} onChange={e => { setBreakForm(f=>({...f,reason:e.target.value})); setBreakPreview(null) }}>
                   <option value="">اختر السبب</option>
                   <option>اختبارات مدرسية</option><option>عيد الفطر</option><option>عيد الأضحى</option>
                   <option>اليوم الوطني</option><option>إجازة رسمية</option><option>صيانة</option><option>أخرى</option>
                 </select>
               </div>
               <div className="form-row">
-                <div className="form-group"><label className="form-label">تاريخ البداية</label><input className="form-input" type="date" value={breakForm.startDate} onChange={e => setBreakForm(f=>({...f,startDate:e.target.value}))}/></div>
-                <div className="form-group"><label className="form-label">تاريخ الانتهاء</label><input className="form-input" type="date" value={breakForm.endDate} onChange={e => setBreakForm(f=>({...f,endDate:e.target.value}))}/></div>
+                <div className="form-group"><label className="form-label">آخر يوم عمل</label><input className="form-input" type="date" value={breakForm.lastDay} onChange={e => { setBreakForm(f=>({...f,lastDay:e.target.value})); setBreakPreview(null) }}/></div>
+                <div className="form-group"><label className="form-label">أول يوم عمل بعد الإجازة</label><input className="form-input" type="date" value={breakForm.resumeDay} onChange={e => { setBreakForm(f=>({...f,resumeDay:e.target.value})); setBreakPreview(null) }}/></div>
               </div>
-              {breakForm.startDate&&breakForm.endDate&&<div style={{ fontSize:12, color:'var(--orange)', marginBottom:'.5rem' }}>
-                {Math.ceil((new Date(breakForm.endDate)-new Date(breakForm.startDate))/(1000*60*60*24))} أيام · سيتم تمديد {subs.filter(s=>s.status==='approved'&&s.end_date&&s.end_date>=breakForm.startDate).length} اشتراك
-              </div>}
-              <button className="btn-primary" disabled={addingBreak} onClick={addBreak}>{addingBreak?'جاري التسجيل...':'تسجيل الإجازة وتمديد الاشتراكات'}</button>
+              {closedDays>0 && <div style={{ fontSize:12, color:'var(--orange)', fontWeight:600, marginBottom:'.5rem' }}>أيام الإغلاق: {closedDays} (من {addDaysStr(breakForm.lastDay,1)} إلى {addDaysStr(breakForm.resumeDay,-1)})</div>}
+              {!breakPreview && <button className="btn-primary" onClick={previewBreak}>معاينة التمديد</button>}
+              {breakPreview && (
+                <div style={{ background:'var(--orange-l)', border:'1px solid #fbbf24', borderRadius:8, padding:'.75rem', marginTop:'.5rem' }}>
+                  <div style={{ fontSize:13, fontWeight:700, color:'var(--t1)' }}>سيتم تمديد {breakPreview.affected.length} اشتراك بمقدار {breakPreview.closedDays} أيام</div>
+                  <div style={{ fontSize:11, color:'var(--t3)', margin:'3px 0 8px' }}>الأكاديمية تعود للعمل يوم {breakPreview.resumeDay}. لم يُحفظ شيء بعد.</div>
+                  <button onClick={() => setPreviewOpen(o=>!o)} style={{ width:'100%', display:'flex', justifyContent:'space-between', background:'#fff', border:'1px solid #fde68a', borderRadius:6, padding:'.45rem .65rem', fontSize:12, cursor:'pointer', fontFamily:'inherit', color:'var(--t1)' }}>
+                    <span>عرض المشتركين وتواريخهم الجديدة</span><span>{previewOpen?'▲':'▼'}</span>
+                  </button>
+                  {previewOpen && (
+                    <div style={{ maxHeight:240, overflowY:'auto', background:'#fff', border:'1px solid #fde68a', borderTop:'none', borderRadius:'0 0 6px 6px' }}>
+                      {breakPreview.affected.map(a => (
+                        <div key={a.id} style={{ display:'flex', justifyContent:'space-between', padding:'.4rem .65rem', borderBottom:'1px solid var(--border)', fontSize:11 }}>
+                          <span style={{ color:'var(--t1)' }}>{a.name}</span>
+                          <span style={{ color:'var(--t3)' }}>{a.old_end} ← <b style={{ color:'var(--green)' }}>{a.new_end}</b></span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ display:'flex', gap:'.6rem', marginTop:10 }}>
+                    <button className="btn-primary" disabled={addingBreak} onClick={confirmBreak} style={{ flex:2, background:'var(--green)' }}>{addingBreak?'جاري الحفظ...':'تأكيد وتمديد'}</button>
+                    <button className="btn-secondary" onClick={() => setBreakPreview(null)} style={{ flex:1 }}>رجوع</button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           <div className="sec">سجل الإجازات</div>
           <div className="card">
             {breaks.length===0?<div className="empty"><div className="empty-icon">📅</div>لا يوجد إجازات مسجلة</div>:
               breaks.map(b => {
-                const days = Math.ceil((new Date(b.end_date)-new Date(b.start_date))/(1000*60*60*24))
+                const n = Array.isArray(b.changes) ? b.changes.length : null
                 return (
                   <div key={b.id} className="list-row">
                     <div className="list-left">
                       <div className="list-av list-av-yellow">🏖</div>
-                      <div><div className="list-name">{b.reason}</div><div className="list-sub">{b.start_date} → {b.end_date} · {days} أيام</div></div>
+                      <div>
+                        <div className="list-name">{b.reason}</div>
+                        <div className="list-sub">{b.last_day ? `آخر يوم عمل ${b.last_day} · العودة ${b.resume_day} · ${b.closed_days} أيام` : `${b.start_date} → ${b.end_date}`}{n!=null?` · ${n} اشتراك`:''}</div>
+                      </div>
                     </div>
                     <button onClick={() => deleteBreak(b)} style={{ fontSize:10, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:6, padding:'3px 8px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit' }}>حذف</button>
                   </div>
@@ -1801,40 +2040,24 @@ function StaffSubs({ toast, refresh, branch }) {
       )}
 
       {subsTab==='subs' && <>
-      {/* RENEWAL REMINDERS */}
-      {expiringSoon.length>0 && (
-        <div className="card" style={{ borderColor:'var(--orange)', marginBottom:'.75rem' }}>
-          <div style={{ padding:'.6rem 1rem', borderBottom:'1px solid var(--border)', fontSize:12, fontWeight:700, color:'var(--orange)' }}>
-            ⏰ يحتاجون تجديد قريباً ({expiringSoon.length})
-          </div>
-          {expiringSoon.map(s => {
-            const days = daysBetween(TODAY, s.end_date)
-            return (
-              <div key={s.id} className="list-row">
-                <div className="list-left">
-                  <div className="list-av list-av-yellow">{s.name[0]}</div>
-                  <div>
-                    <div className="list-name">{s.name}</div>
-                    <div className="list-sub">ينتهي {s.end_date}{s.guardian_phone ? ` · 📞 ${s.guardian_phone}` : ''}</div>
-                  </div>
-                </div>
-                <div className="list-right">
-                  <span className={`badge ${days<=3?'badge-r':'badge-o'}`} style={{ fontSize:10 }}>{days} أيام</span>
-                  <button onClick={() => openRenew(s)}
-                    style={{ fontSize:10, background:'var(--green-l)', border:'1px solid var(--green)', borderRadius:6, padding:'3px 8px', color:'var(--green)', cursor:'pointer', fontFamily:'inherit', marginTop:3 }}>تجديد</button>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
+      {/* RETURNED BY THE OWNER */}
+      <ReturnedSection count={returnedSubs.length}>
+        {returnedSubs.map(s => (
+          <ReturnedCard key={s.id} title={`${s.name}${s.renewal_of?' (تجديد)':''}`} sub={`${s.start_date||''} ← ${s.end_date||''}`} amount={s.total_amount}
+            reason={s.return_reason} returnedAt={s.returned_at} onEdit={() => openResend(s)} onDelete={() => deleteSub(s)} />
+        ))}
+      </ReturnedSection>
+      <ReturnedPaymentsBox branch={branch} recordType="subscriber" createdBy={createdBy} refresh={refresh} toast={toast} onDone={load} />
+
+      {/* EXPIRING SOON: collapsed until opened */}
+      <ExpiringBox rows={expiringSoon} onRenew={openRenew} />
 
       {/* PENDING */}
       {pendingSubs.length>0 && (
         <>
           <div className="sec">معلق - بانتظار موافقة المالك</div>
           <div className="card">
-            {pendingSubs.map((s,i) => (
+            {pendingSubs.map(s => (
               <div key={s.id} className="list-row">
                 <div className="list-left">
                   <div className="list-av list-av-yellow">{s.name[0]}</div>
@@ -1842,7 +2065,7 @@ function StaffSubs({ toast, refresh, branch }) {
                 </div>
                 <div className="list-right">
                   <span className="badge badge-o" style={{ fontSize:10 }}>معلق</span>
-                  <button onClick={() => deleteSub(s)} style={{ fontSize:9, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:5, padding:'2px 6px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit', marginTop:3 }}>حذف</button>
+                  <button onClick={() => deleteSub(s)} style={{ ...btn('var(--red-l)','var(--red-m)','var(--red)'), marginTop:3 }}>حذف</button>
                 </div>
               </div>
             ))}
@@ -1868,7 +2091,7 @@ function StaffSubs({ toast, refresh, branch }) {
                   <div className={`list-av ${avColors[i%4]}`}>{s.name[0]}</div>
                   <div style={{ minWidth:0 }}>
                     <div className="list-name">{s.name}</div>
-                    <div className="list-sub">{s.sub_amount>0?`${fmt(s.sub_amount)} ر`:''}{s.has_bus?' · باص':''}{s.has_kit?' · طقم':''}{s.guardian_phone?` · 📞 ${s.guardian_phone}`:''}</div>
+                    <div className="list-sub">{s.sub_amount>0?`${fmt(s.sub_amount)} ر`:''}{s.type==='family'?` · عائلة ${s.members_count||''} أفراد`:''}{s.has_bus?' · باص':''}{s.has_kit?' · طقم':''}{s.guardian_phone?` · 📞 ${s.guardian_phone}`:''}</div>
                     <div className="list-sub">{s.end_date?`حتى ${s.end_date}`:''}</div>
                   </div>
                 </div>
@@ -1877,27 +2100,20 @@ function StaffSubs({ toast, refresh, branch }) {
                   {Number(s.balance)>0 && <div style={{ fontSize:10, color:'var(--red)', fontWeight:600 }}>متبقي {fmt(s.balance)} ر</div>}
                   <div style={{ display:'flex', gap:4, marginTop:3, flexWrap:'wrap', justifyContent:'flex-end' }}>
                     <span className={`badge ${st.cls}`} style={{ fontSize:9 }}>{st.label}</span>
-                    {Number(s.balance)>0 && <button onClick={() => setPayTarget({ type:'subscriber', rec:s })}
-                      style={{ fontSize:9, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:5, padding:'2px 6px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit' }}>دفعة</button>}
-                    <button onClick={() => openRenew(s)}
-                      style={{ fontSize:9, background:'var(--green-l)', border:'1px solid var(--green)', borderRadius:5, padding:'2px 6px', color:'var(--green)', cursor:'pointer', fontFamily:'inherit' }}>تجديد</button>
-                    {s.status==='approved' && !s.is_frozen && <button onClick={() => { setFreezeSub(s); setFreezeDays(7); setFreezeModal(true) }}
-                      style={{ fontSize:9, background:'#e0f2fe', border:'1px solid #38bdf8', borderRadius:5, padding:'2px 6px', color:'#0369a1', cursor:'pointer', fontFamily:'inherit' }}>تجميد</button>}
-                    {s.is_frozen && <button onClick={async () => { await supabase.from('subscribers').update({is_frozen:false}).eq('id',s.id); toast('✅ تم إلغاء التجميد','success'); load() }}
-                      style={{ fontSize:9, background:'#e0f2fe', border:'1px solid #38bdf8', borderRadius:5, padding:'2px 6px', color:'#0369a1', cursor:'pointer', fontFamily:'inherit' }}>إلغاء تجميد ❄️</button>}
-                    <button onClick={() => { setEditSub(s); setEditForm({ name:s.name, phone:s.guardian_phone||'', startDate:s.start_date||'', endDate:s.end_date||'', pkg:s.sub_amount||300 }); setEditModal(true) }}
-                      style={{ fontSize:9, background:'var(--surface2)', border:'1px solid var(--border)', borderRadius:5, padding:'2px 6px', color:'var(--t2)', cursor:'pointer', fontFamily:'inherit' }}>تعديل</button>
-                    {s.status==='pending' && <button onClick={() => deleteSub(s)}
-                      style={{ fontSize:9, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:5, padding:'2px 6px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit' }}>حذف</button>}
+                    {Number(s.balance)>0 && <button onClick={() => setPayTarget({ type:'subscriber', rec:s })} style={btn('var(--red-l)','var(--red-m)','var(--red)')}>دفعة</button>}
+                    <button onClick={() => openRenew(s)} style={btn('var(--green-l)','var(--green)','var(--green)')}>تجديد</button>
+                    {!s.is_frozen && <button onClick={() => { setFreezeSub(s); setFreezeDays(7); setFreezeModal(true) }} style={btn('#e0f2fe','#38bdf8','#0369a1')}>تجميد</button>}
+                    {s.is_frozen && <button onClick={async () => { await supabase.from('subscribers').update({is_frozen:false}).eq('id',s.id); toast('✅ تم إلغاء التجميد','success'); load() }} style={btn('#e0f2fe','#38bdf8','#0369a1')}>إلغاء تجميد ❄️</button>}
+                    <button onClick={() => { setEditSub(s); setEditForm({ name:s.name, phone:s.guardian_phone||'', startDate:s.start_date||'', endDate:s.end_date||'' }); setEditModal(true) }} style={btn('var(--surface2)','var(--border)','var(--t2)')}>تعديل</button>
                   </div>
                 </div>
               </div>
             )
           })}
-              </div>
+      </div>
 
-      <button className="fab" onClick={() => setModal(true)}>👤</button>
-      </> }
+      <button className="fab" onClick={openAdd}>👤</button>
+      </>}
 
       {/* RENEW MODAL */}
       <Modal open={renewModal} onClose={() => setRenewModal(false)} title={`تجديد: ${renewSub?.name||''}`}>
@@ -1913,7 +2129,7 @@ function StaffSubs({ toast, refresh, branch }) {
         <div className="form-group">
           <label className="form-label">عدد أيام التجميد</label>
           <input className="form-input" type="number" min="1" max="90" value={freezeDays} onChange={e => setFreezeDays(e.target.value)}/>
-          <div className="list-sub" style={{ marginTop:4 }}>تاريخ الانتهاء الجديد: {freezeSub?.end_date ? (() => { const d=new Date(freezeSub.end_date); d.setDate(d.getDate()+Number(freezeDays)); return d.toISOString().slice(0,10) })() : ''}</div>
+          <div className="list-sub" style={{ marginTop:4 }}>تاريخ الانتهاء الجديد: {freezeSub?.end_date ? addDaysStr(freezeSub.end_date, Number(freezeDays)) : ''}</div>
         </div>
         <button className="btn-primary" onClick={freezeSubscriber}>تجميد الاشتراك ❄️</button>
         <button className="btn-secondary" onClick={() => setFreezeModal(false)}>إلغاء</button>
@@ -1930,27 +2146,28 @@ function StaffSubs({ toast, refresh, branch }) {
         <div className="form-group">
           <label className="form-label">إجمالي الاشتراك (ر)</label>
           <input className="form-input" readOnly value={fmt(editSub?.total_amount||0)+' ر'} style={{ color:'var(--t3)', background:'var(--surface2)' }}/>
-          <div className="list-sub" style={{ marginTop:4 }}>المبلغ لا يُعدَّل بعد الإدخال. استخدم تسجيل دفعة للمبلغ المتبقي.</div>
+          <div className="list-sub" style={{ marginTop:4 }}>المبلغ لا يُعدَّل بعد الاعتماد. إن كان فيه خطأ يصححه المالك، وللمبلغ المتبقي استخدم تسجيل دفعة.</div>
         </div>
         <button className="btn-primary" disabled={submitting} onClick={saveEdit}>{submitting?'جاري الحفظ...':'حفظ التعديلات'}</button>
         <button className="btn-secondary" onClick={() => setEditModal(false)}>إلغاء</button>
       </Modal>
 
-      {/* ADD MODAL */}
-      <Modal open={modal} onClose={() => setModal(false)} title="إضافة مشترك جديد">
+      {/* ADD / FIX A RETURNED SUBSCRIPTION */}
+      <Modal open={modal} onClose={closeAdd} title={resendRec ? `تعديل وإعادة إرسال: ${resendRec.name}` : 'إضافة مشترك جديد'}>
+        {resendRec?.return_reason && <div className="info-box info-yellow">سبب الإرجاع: {resendRec.return_reason}</div>}
         <div className="form-row">
           <div className="form-group"><label className="form-label">الاسم</label><input className="form-input" value={form.name} onChange={e => setForm(f=>({...f,name:e.target.value}))} placeholder="اسم المشترك"/></div>
           <div className="form-group"><label className="form-label">رقم ولي الأمر</label><input className="form-input" type="tel" value={form.phone} onChange={e => setForm(f=>({...f,phone:e.target.value}))} placeholder="05XXXXXXXX"/></div>
         </div>
         <div className="form-group">
           <label className="form-label">النوع</label>
-          <select className="form-select" value={form.type} onChange={e => setForm(f=>({...f,type:e.target.value}))}>
+          <select className="form-select" value={form.type} onChange={e => setForm(f=>({...f,type:e.target.value,members:e.target.value==='family'?Math.max(2,Number(f.members)||2):1,subOverride:''}))}>
             <option value="individual">فردي</option><option value="family">عائلي</option>
           </select>
         </div>
         <SubPricingForm f={form} setF={setForm} BUS_PRICES={BUS_PRICES} inventory={inventory}/>
-        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الحفظ...':'إضافة المشترك'}</button>
-        <button className="btn-secondary" onClick={() => setModal(false)}>إلغاء</button>
+        <button className="btn-primary" disabled={submitting} onClick={resendRec ? resend : submit}>{submitting?'جاري الحفظ...':resendRec?'إعادة الإرسال للمالك':'إضافة المشترك'}</button>
+        <button className="btn-secondary" onClick={closeAdd}>إلغاء</button>
       </Modal>
 
       <SubscriberDetail sub={detailSub} onClose={() => setDetailSub(null)}/>
@@ -1969,6 +2186,7 @@ function StaffBus({ refresh, branch, toast }) {
   const [addBusModal, setAddBusModal] = useState(false)
   const [allSubs, setAllSubs] = useState([])
   const [busSearch, setBusSearch] = useState('')
+  const [listSearch, setListSearch] = useState('')
   const [selectedForBus, setSelectedForBus] = useState(null)
   const [addBusForm, setAddBusForm] = useState(emptyBus)
   const BUS_PRICES = [150,200,250,300,350,400,450,500,550,600,650,700,750]
@@ -1981,7 +2199,7 @@ function StaffBus({ refresh, branch, toast }) {
       supabase.from('subscribers').select('*').eq('branch', branch).eq('has_bus', true).eq('status','approved').eq('is_current', true).order('created_at',{ascending:false}),
       supabase.from('subscribers').select('*').eq('branch', branch).eq('status','approved').eq('is_current', true).eq('has_bus', false).order('name'),
     ])
-    setSubs(bus.data||[]); setAllSubs(all.data||[])
+    setSubs((bus.data||[]).sort(busNewest)); setAllSubs((all.data||[]).sort(newestFirst))
   }
   useEffect(() => { load() }, [refresh, branch])
 
@@ -2042,6 +2260,9 @@ function StaffBus({ refresh, branch, toast }) {
 
   const busRev = subs.reduce((a,s) => a+Number(s.bus_amount||0), 0)
 
+  const q = listSearch.trim()
+  const shownSubs = q ? subs.filter(s => (s.name || '').includes(q) || (s.guardian_phone || '').includes(q)) : subs
+
   return (
     <div className="page">
       <div className="kpi-grid">
@@ -2057,10 +2278,13 @@ function StaffBus({ refresh, branch, toast }) {
       <div style={{ background:'var(--orange-l)', border:'1px solid #fbbf24', borderRadius:8, padding:'.6rem .875rem', fontSize:12, color:'var(--orange)', marginBottom:'.75rem' }}>
         ⚠️ إيراد الباص ({fmt(busRev)} ر) يُحوَّل لأصحاب الباص ولا يدخل في حسابات الأكاديمية
       </div>
-      <div className="sec">قائمة الباص ({subs.length} مشترك)</div>
-      <div className="card">
-        {subs.length===0 ? <div className="empty"><div className="empty-icon">🚌</div>لا يوجد مشتركون بالباص</div> :
-          subs.map((s,i) => (
+      <div className="sec">قائمة الباص ({q ? `${shownSubs.length} من ${subs.length}` : subs.length} مشترك)</div>
+      <div className="search-wrap" style={{ borderRadius:'var(--r) var(--r) 0 0', border:'1px solid var(--border)' }}>
+        <input className="search-input" placeholder="ابحث باسم المشترك أو رقمه..." value={listSearch} onChange={e => setListSearch(e.target.value)}/>
+      </div>
+      <div className="card" style={{ borderTop:'none', borderRadius:'0 0 var(--r) var(--r)' }}>
+        {shownSubs.length===0 ? <div className="empty"><div className="empty-icon">🚌</div>{subs.length===0 ? 'لا يوجد مشتركون بالباص' : 'لا توجد نتائج'}</div> :
+          shownSubs.map((s,i) => (
             <div key={s.id} className="list-row">
               <div className="list-left">
                 <div className="list-av list-av-blue">{s.name[0]}</div>
@@ -2193,32 +2417,53 @@ function StaffInventory({ toast, refresh, branch }) {
   const blankSale = { qty:1, override:'', paid:'', method:'نقدي', receiptUrl:'' }
   const [form, setForm] = useState(blankSale)
   const [submitting, setSubmitting] = useState(false)
-  const [editGroup, setEditGroup] = useState(null)
+  const [resendSale, setResendSale] = useState(null)      // a returned sale being fixed
   const [payTarget, setPayTarget] = useState(null)
   const createdBy = ROLES[branch==='jazan'?'admin_jazan':'admin_riyadh']?.label
 
   async function load() {
     const [inv, s, subs, kits] = await Promise.all([
       supabase.from('inventory').select('*').order('name'),
-      supabase.from('sales').select('*').eq('branch', branch).neq('status','rejected').order('created_at',{ascending:false}).limit(40),
-      supabase.from('subscribers').select('id,name,guardian_phone').eq('branch', branch).eq('status','approved').eq('is_current', true).order('name'),
+      supabase.from('sales').select('*').eq('branch', branch).in('status',['approved','pending','returned']).order('created_at',{ascending:false}).limit(60),
+      supabase.from('subscribers').select('id,name,guardian_phone,start_date,created_at').eq('branch', branch).eq('status','approved').eq('is_current', true),
       supabase.from('subscribers').select('id',{count:'exact',head:true}).eq('branch', branch).eq('status','approved').eq('has_kit', true),
     ])
-    setInventory(inv.data||[]); setSales(s.data||[]); setSubsList(subs.data||[]); setKitCount(kits.count||0)
+    setInventory(inv.data||[]); setSales(s.data||[]); setSubsList((subs.data||[]).sort(newestFirst)); setKitCount(kits.count||0)
   }
   useEffect(() => { load() }, [refresh, branch])
 
   const groups = groupInventory(inventory)
-  const approvedSales = sales.filter(s => s.status==='approved')
+  const visibleSales = sales.filter(s => s.status==='approved' || s.status==='pending')
+  const returnedSales = sales.filter(s => s.status==='returned' && s.created_by===createdBy)
   const pendingSales = sales.filter(s => s.status==='pending')
-  const monthSales = approvedSales.filter(s => s.created_at?.startsWith(month))
+  const monthSales = sales.filter(s => s.status==='approved' && s.created_at?.startsWith(month))
   const monthCollected = monthSales.reduce((a,s) => a+Number(s.paid_amount||0), 0)
   const monthUnits = monthSales.filter(s => s.item !== 'مياه').reduce((a,s) => a+Number(s.qty||1), 0) + kitCount
 
   function openSale(g) {
-    setGroup(g); setSize(''); setChosenSub(null); setSubSearch(''); setForm(blankSale); setModal(true)
+    setResendSale(null); setGroup(g); setSize(''); setChosenSub(null); setSubSearch(''); setForm(blankSale); setModal(true)
   }
-  function closeSale() { setModal(false); setGroup(null); setChosenSub(null) }
+  function closeSale() { setModal(false); setGroup(null); setChosenSub(null); setResendSale(null) }
+
+  // the owner returned it: open the same form, already filled in
+  async function openResend(s) {
+    const g = groups.find(x => x.name === s.item)
+    if (!g) { alert('الصنف غير موجود في المخزون'); return }
+    const { data: pays } = await supabase.from('payments').select('*').eq('record_type','sale').eq('record_id', String(s.id)).eq('kind','initial')
+    const pay = (pays||[])[0]
+    setResendSale(s); setGroup(g); setSize(s.size||''); setSubSearch('')
+    setChosenSub(s.subscriber_id ? { id:s.subscriber_id, name:s.subscriber_name } : null)
+    const baseT = Number(g.price) * Number(s.qty)
+    setForm({ qty:s.qty, override: Number(s.total) !== baseT ? String(s.total) : '', paid: String(Number(s.paid_amount||0)), method: pay?.method || 'نقدي', receiptUrl: pay?.receipt_url || '' })
+    setModal(true)
+  }
+
+  async function deleteReturned(s) {
+    if (!confirm('هل تريد حذف هذا البيع؟')) return
+    await supabase.from('payments').delete().eq('record_type','sale').eq('record_id', String(s.id))
+    await supabase.from('sales').delete().eq('id', s.id)
+    toast('تم الحذف','error'); load()
+  }
 
   // live figures for the sale form
   const sizeRow = group && group.sized ? group.rows.find(r => r.size === size) : null
@@ -2238,7 +2483,7 @@ function StaffInventory({ toast, refresh, branch }) {
     if (isNaN(paidNow) || paidNow < 0 || paidNow > total) { alert('المبلغ المدفوع غير صحيح'); return }
     if (paidNow > 0 && form.method !== 'نقدي' && !form.receiptUrl) { alert('يجب رفع الإيصال'); return }
     setSubmitting(true)
-    const { data, error } = await supabase.from('sales').insert({
+    const fields = {
       item: group.name, size: sizeRow?.size || null, qty, price: Math.round(total/qty), total,
       discount_amount: Math.max(0, baseTotal-total),
       payment_method: paidNow>0 ? form.method : 'غير مدفوع',
@@ -2246,12 +2491,23 @@ function StaffInventory({ toast, refresh, branch }) {
       created_by: createdBy, branch, status: 'pending',
       subscriber_id: chosenSub ? String(chosenSub.id) : null, subscriber_name: chosenSub?.name || null,
       paid_amount: paidNow, balance: total-paidNow
-    }).select().single()
-    if (error) { setSubmitting(false); toast('خطأ في الحفظ','error'); console.error(error); return }
-    await insertInitialPayments({ branch, type:'sale', rec:data, label: chosenSub?.name || group.name, createdBy,
-      parts:[{ method: form.method, amount: paidNow, receipt: form.receiptUrl }] })
+    }
+    const parts = [{ method: form.method, amount: paidNow, receipt: form.receiptUrl }]
+    if (resendSale) {
+      const { error } = await supabase.from('sales').update({ ...fields, return_reason: null, returned_at: null }).eq('id', resendSale.id)
+      if (error) { setSubmitting(false); toast('خطأ في الحفظ','error'); console.error(error); return }
+      await supabase.from('payments').delete().eq('record_type','sale').eq('record_id', String(resendSale.id)).eq('kind','initial')
+      // the stock went back when it was returned; it goes out again now
+      await supabase.rpc('adjust_inventory', { p_name: group.name, p_size: sizeRow?.size || '', p_qty: -qty })
+      await insertInitialPayments({ branch, type:'sale', rec:{ ...resendSale, ...fields }, label: chosenSub?.name || group.name, createdBy, parts })
+      toast('✅ أُعيد الإرسال للمالك','success')
+    } else {
+      const { data, error } = await supabase.from('sales').insert(fields).select().single()
+      if (error) { setSubmitting(false); toast('خطأ في الحفظ','error'); console.error(error); return }
+      await insertInitialPayments({ branch, type:'sale', rec:data, label: chosenSub?.name || group.name, createdBy, parts })
+      toast('✅ تم الحفظ بنجاح','success')
+    }
     setSubmitting(false)
-    toast('✅ تم الحفظ بنجاح','success')
     closeSale(); load()
   }
 
@@ -2268,16 +2524,25 @@ function StaffInventory({ toast, refresh, branch }) {
         <div className="kpi"><div className="kpi-label">المحصّل من المبيعات</div><div className="kpi-val kpi-val-g">{fmt(monthCollected)} ر</div></div>
         <div className="kpi"><div className="kpi-label">قطع مباعة</div><div className="kpi-val">{monthUnits} قطعة</div></div>
       </div>
+
+      <ReturnedSection count={returnedSales.length}>
+        {returnedSales.map(s => (
+          <ReturnedCard key={s.id} title={`${s.item}${s.size ? ' · '+s.size : ''} × ${s.qty}`} sub={`${s.subscriber_name || ''} · ${s.created_at?.slice(0,10)}`} amount={s.total}
+            reason={s.return_reason} returnedAt={s.returned_at} onEdit={() => openResend(s)} onDelete={() => deleteReturned(s)} />
+        ))}
+      </ReturnedSection>
+      <ReturnedPaymentsBox branch={branch} recordType="sale" createdBy={createdBy} refresh={refresh} toast={toast} onDone={load} />
+
       {pendingSales.length>0 && (
         <div className="info-box info-yellow">{pendingSales.length} مبيعات بانتظار موافقة المالك</div>
       )}
 
-      <InventoryGrid items={inventory} onSale={openSale} onEdit={g => setEditGroup(g)} />
+      <InventoryGrid items={inventory} onSale={openSale} />
 
       <div className="sec">سجل المبيعات</div>
       <div className="card">
-        {sales.length===0 ? <div className="empty"><div className="empty-icon">🛍️</div>لا يوجد مبيعات</div> :
-          sales.map(s => (
+        {visibleSales.length===0 ? <div className="empty"><div className="empty-icon">🛍️</div>لا يوجد مبيعات</div> :
+          visibleSales.map(s => (
             <div key={s.id} className="list-row">
               <div className="list-left">
                 <div className="list-av list-av-green">🛍</div>
@@ -2300,7 +2565,8 @@ function StaffInventory({ toast, refresh, branch }) {
 
       <button className="fab" onClick={() => groups.length>0 && openSale(groups[0])}>🛍️</button>
 
-      <Modal open={modal} onClose={closeSale} title="تسجيل بيع">
+      <Modal open={modal} onClose={closeSale} title={resendSale ? 'تعديل بيع وإعادة إرساله' : 'تسجيل بيع'}>
+        {resendSale?.return_reason && <div className="info-box info-yellow">سبب الإرجاع: {resendSale.return_reason}</div>}
         <div className="form-group">
           <label className="form-label">الصنف</label>
           <select className="form-select" value={group?.name||''} onChange={e => { setGroup(groups.find(g => g.name===e.target.value)); setSize('') }}>
@@ -2331,7 +2597,7 @@ function StaffInventory({ toast, refresh, branch }) {
                   {subMatches.length===0 ? <div className="empty" style={{ padding:'.75rem' }}>لا توجد نتائج</div> : subMatches.map(s => (
                     <div key={s.id} className="list-row" style={{ cursor:'pointer' }} onClick={() => setChosenSub(s)}>
                       <div className="list-name">{s.name}</div>
-                      <span style={{ fontSize:11, color:'var(--red)' }}>اختيار ←</span>
+                      <span style={{ fontSize:11, color:'var(--green)' }}>اختيار ←</span>
                     </div>
                   ))}
                 </div>
@@ -2344,12 +2610,12 @@ function StaffInventory({ toast, refresh, branch }) {
           <div className="form-group"><label className="form-label">سعر الوحدة</label><input className="form-input" readOnly value={fmt(group?.price||0)+' ر'}/></div>
         </div>
         <div className="form-group">
-            <label className="form-label">السعر النهائي (ر)</label>
-            <input className="form-input" type="number" min="0" placeholder={String(baseTotal)} value={form.override} onChange={e => setForm(f=>({...f,override:e.target.value}))}/>
-          </div>
+          <label className="form-label">السعر النهائي (ر)</label>
+          <input className="form-input" type="number" min="0" placeholder={String(baseTotal)} value={form.override} onChange={e => setForm(f=>({...f,override:e.target.value}))}/>
+        </div>
         <div style={{ display:'flex', justifyContent:'space-between', fontSize:14, fontWeight:700, marginBottom:'.75rem' }}>
           <span style={{ color:'var(--t1)' }}>الإجمالي</span>
-          <span style={{ color:'var(--red)' }}>{fmt(total)} ر</span>
+          <span style={{ color:'var(--green)' }}>{fmt(total)} ر</span>
         </div>
         <div className="form-group">
           <label className="form-label">المدفوع الآن (اتركه فارغاً للدفع كاملاً)</label>
@@ -2357,12 +2623,11 @@ function StaffInventory({ toast, refresh, branch }) {
           {remaining>0 && <div style={{ fontSize:11, color:'var(--red)', marginTop:4 }}>سيبقى {fmt(remaining)} ر مستحقاً على المشترك</div>}
         </div>
         {paidNow>0 && <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={form.method} onChange={v => setForm(f=>({...f,method:v,receiptUrl:''}))}/></div>}
-        {paidNow>0 && form.method!=='نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="sales" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/>}
-        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الحفظ...':'تسجيل البيع'}</button>
+        {paidNow>0 && form.method!=='نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="sales" current={form.receiptUrl} onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/>}
+        <button className="btn-primary" disabled={submitting} onClick={submit} style={{ background:'var(--green)' }}>{submitting?'جاري الحفظ...':resendSale?'إعادة الإرسال للمالك':'تسجيل البيع'}</button>
         <button className="btn-secondary" onClick={closeSale}>إلغاء</button>
       </Modal>
 
-      <StockEditModal group={editGroup} onClose={() => setEditGroup(null)} onSaved={load} toast={toast}/>
       <PaymentModal target={payTarget} onClose={() => setPayTarget(null)} toast={toast} onDone={load} createdBy={createdBy}/>
     </div>
   )
@@ -2372,44 +2637,69 @@ function StaffInventory({ toast, refresh, branch }) {
 function MyExpenses({ role, toast, refresh, branch }) {
   const [month, setMonth] = useState('2026-09')
   const [pending, setPending] = useState([])
+  const [returned, setReturned] = useState([])
   const [approved, setApproved] = useState([])
-  const [modal, setModal] = useState(false)
-  const [form, setForm] = useState({ cat:'', desc:'', amount:'', date:TODAY, payment:'نقدي', receiptUrl:'' })
+  const blank = { cat:'', desc:'', amount:'', date:TODAY, payment:'نقدي', receiptUrl:'' }
+  const [form, setForm] = useState(blank)
+  const [resendExp, setResendExp] = useState(null)       // a returned expense being fixed
   const [submitting, setSubmitting] = useState(false)
   const by = ROLES[role]?.label
 
   async function load(m) {
-    const [p, a] = await Promise.all([
+    const [p, r, a] = await Promise.all([
       supabase.from('expenses').select('*').eq('branch', branch).eq('status','pending').eq('submitted_by', by).order('created_at',{ascending:false}),
+      supabase.from('expenses').select('*').eq('branch', branch).eq('status','returned').eq('submitted_by', by).order('returned_at',{ascending:false}),
       supabase.from('expenses').select('*').eq('branch', branch).eq('status','approved').eq('submitted_by', by).gte('date', m+'-01').lte('date', monthEnd(m)).order('date',{ascending:false}),
     ])
-    setPending(p.data||[]); setApproved(a.data||[])
+    setPending(p.data||[]); setReturned(r.data||[]); setApproved(a.data||[])
   }
   useEffect(() => { load(month) }, [month, refresh])
+
+  function openResend(e) {
+    setResendExp(e)
+    setForm({ cat:e.category, desc:e.description, amount:String(e.amount), date:e.date, payment:e.payment_method||'نقدي', receiptUrl:e.receipt_url||'' })
+    if (typeof window !== 'undefined') window.scrollTo({ top:0, behavior:'smooth' })
+  }
+  function cancelResend() { setResendExp(null); setForm(blank) }
+
+  async function deleteExpense(e) {
+    if (!confirm('هل تريد حذف هذا المصروف؟')) return
+    await supabase.from('expenses').delete().eq('id', e.id)
+    load(month)
+  }
 
   async function submit() {
     if (!form.cat||!form.desc||!form.amount) { alert('أكمل جميع الحقول واختر التصنيف'); return }
     if (form.payment!=='نقدي' && !form.receiptUrl) { alert('يجب رفع الإيصال'); return }
     setSubmitting(true)
-    const { error } = await supabase.from('expenses').insert({
+    const fields = {
       category:form.cat, description:form.desc, amount:parseFloat(form.amount),
       date:form.date, payment_method:form.payment, has_receipt:form.payment!=='نقدي',
       receipt_url:form.receiptUrl||null, status:'pending', submitted_by:by, branch
-    })
+    }
+    const { error } = resendExp
+      ? await supabase.from('expenses').update({ ...fields, return_reason:null, returned_at:null }).eq('id', resendExp.id)
+      : await supabase.from('expenses').insert(fields)
     setSubmitting(false)
     if (error) { toast('خطأ في الحفظ','error'); return }
-    toast('✅ تم تسجيل المصروف بنجاح','success')
-    setModal(false)
-    setForm({ cat:'', desc:'', amount:'', date:TODAY, payment:'نقدي', receiptUrl:'' })
-    load(month)
+    toast(resendExp ? '✅ أُعيد الإرسال للمالك' : '✅ تم تسجيل المصروف بنجاح','success')
+    setResendExp(null); setForm(blank); load(month)
   }
 
   return (
     <div className="page">
+      <ReturnedSection count={returned.length}>
+        {returned.map(e => (
+          <ReturnedCard key={e.id} title={e.description} sub={`${e.category} · ${e.date}`} amount={e.amount}
+            reason={e.return_reason} returnedAt={e.returned_at} onEdit={() => openResend(e)} onDelete={() => deleteExpense(e)} />
+        ))}
+      </ReturnedSection>
+
       {/* EXPENSE FORM - on top */}
       <div className="card" style={{ marginBottom:'.75rem' }}>
         <div style={{ padding:'.875rem 1rem' }}>
-          <div style={{ fontSize:13, fontWeight:700, color:'var(--red)', marginBottom:'.875rem' }}>تسجيل مصروف جديد</div>
+          <div style={{ fontSize:13, fontWeight:700, color:'var(--red)', marginBottom:'.875rem' }}>{resendExp ? 'تعديل مصروف وإعادة إرساله' : 'تسجيل مصروف جديد'}</div>
+          {resendExp?.return_reason && <div className="info-box info-yellow">سبب الإرجاع: {resendExp.return_reason}</div>}
           <div className="cat-grid" style={{ marginBottom:'.75rem' }}>
             {(role==='admin_riyadh'||role==='admin_jazan'
               ? [['رواتب','👤'],['مياه مخزون','💧'],['محامي','⚖️'],['أخرى','📦']]
@@ -2424,8 +2714,9 @@ function MyExpenses({ role, toast, refresh, branch }) {
             <input className="form-input" type="date" value={form.date} onChange={e => setForm(f=>({...f,date:e.target.value}))}/>
           </div>
           <PaymentBtns value={form.payment} onChange={v => setForm(f=>({...f,payment:v,receiptUrl:''}))}/>
-          {form.payment!=='نقدي' && <div style={{ marginTop:'.75rem' }}><ReceiptUpload label="إرفاق الإيصال" folder="expenses" onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/></div>}
-          <button className="btn-primary" style={{ marginTop:'.75rem' }} disabled={submitting} onClick={submit}>{submitting?'جاري الحفظ...':'تسجيل المصروف ⟶'}</button>
+          {form.payment!=='نقدي' && <div style={{ marginTop:'.75rem' }}><ReceiptUpload label="إرفاق الإيصال" folder="expenses" current={form.receiptUrl} onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/></div>}
+          <button className="btn-primary" style={{ marginTop:'.75rem' }} disabled={submitting} onClick={submit}>{submitting?'جاري الحفظ...':resendExp?'إعادة الإرسال للمالك ⟶':'تسجيل المصروف ⟶'}</button>
+          {resendExp && <button className="btn-secondary" onClick={cancelResend}>إلغاء التعديل</button>}
         </div>
       </div>
 
@@ -2452,7 +2743,7 @@ function MyExpenses({ role, toast, refresh, branch }) {
                 <div className="approval-desc">{a.description}</div>
                 <div className="approval-meta">{a.date} · {fmt(a.amount)} ر · {a.payment_method}</div>
                 {a.receipt_url && <a href={a.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
-                <button onClick={async () => { if(confirm('هل تريد حذف هذا المصروف؟')) { await supabase.from('expenses').delete().eq('id',a.id); load(month) } }}
+                <button onClick={() => deleteExpense(a)}
                   style={{ fontSize:10, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:6, padding:'3px 10px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit', marginTop:6, display:'inline-block' }}>حذف</button>
               </div>
             </div>
@@ -2500,7 +2791,9 @@ function FieldsCal({ role, toast, refresh, branch }) {
   const [modal, setModal] = useState(false)
   const [pitch, setPitch] = useState('small')
   const [water, setWater] = useState(false)
-  const [form, setForm] = useState({ name:'', phone:'', date:TODAY, time:'', deposit:0, depositMethod:'نقدي', depositReceipt:'', payers:[] })
+  const blankBooking = { name:'', phone:'', date:TODAY, time:'', deposit:0, depositMethod:'نقدي', depositReceipt:'', payers:[] }
+  const [form, setForm] = useState(blankBooking)
+  const [resendBk, setResendBk] = useState(null)      // a returned booking being fixed
   const emptyPayer = { method:'نقدي', amount:'', receipt:'' }
   function addPayer() { setForm(f=>({...f,payers:[...f.payers,{...emptyPayer}]})) }
   function updatePayer(i,k,v) { setForm(f=>({...f,payers:f.payers.map((p,j)=>j===i?{...p,[k]:v}:p)})) }
@@ -2516,7 +2809,8 @@ function FieldsCal({ role, toast, refresh, branch }) {
 
   async function deleteBooking(b) {
     if (!confirm('هل تريد حذف هذا الحجز؟')) return
-    if (b.water) await supabase.rpc('adjust_inventory', { p_name: 'مياه', p_size: '', p_qty: 1 })
+    // a returned booking already gave its water box back
+    if (b.water && b.status==='pending') await supabase.rpc('adjust_inventory', { p_name: 'مياه', p_size: '', p_qty: 1 })
     await supabase.from('payments').delete().eq('record_type', 'booking').eq('record_id', String(b.id))
     await supabase.from('bookings').delete().eq('id', b.id)
     load()
@@ -2536,7 +2830,8 @@ function FieldsCal({ role, toast, refresh, branch }) {
         b.date === form.date &&
         b.pitch === pitch &&
         b.time === form.time &&
-        b.status !== 'rejected'
+        !['rejected','cancelled','returned'].includes(b.status) &&
+        (!resendBk || b.id !== resendBk.id)
       )
       if (conflict) {
         alert(`⚠️ تعارض في الحجز!\n${pitch==='small'?'الملعب الصغير':'الملعب الكبير'} محجوز بالفعل في ${form.date} الساعة ${form.time} باسم "${conflict.booker_name}".\nاختر وقتاً آخر.`)
@@ -2557,7 +2852,7 @@ function FieldsCal({ role, toast, refresh, branch }) {
     const payMethod = methods.length === 0 ? 'غير مدفوع' : methods.length === 1 ? methods[0] : 'مختلط'
     const payStatus = totalPaid >= amount ? 'مكتمل' : totalPaid > 0 ? 'جزئي' : 'غير مدفوع'
     setSubmitting(true)
-    const { data, error } = await supabase.from('bookings').insert({
+    const fields = {
       pitch, booker_name: form.name.trim(), booker_phone: form.phone || null,
       date: form.date, time: form.time, water, amount,
       payment_method: payMethod, has_receipt: parts.some(p => p.receipt),
@@ -2565,27 +2860,53 @@ function FieldsCal({ role, toast, refresh, branch }) {
       deposit_method: form.depositMethod, collected: totalPaid, balance: amount - totalPaid,
       payment_splits: JSON.stringify(parts.map(p => ({ method: p.method, amount: p.amount, type: p.type }))), payment_status: payStatus,
       created_by: ROLES[role]?.label, branch, status: 'pending'
-    }).select().single()
-    if (error) { setSubmitting(false); toast('خطأ في الحفظ', 'error'); console.error(error); return }
-    await insertInitialPayments({ branch, type: 'booking', rec: data, label: form.name.trim(), createdBy: ROLES[role]?.label, parts })
+    }
+    if (resendBk) {
+      const { error } = await supabase.from('bookings').update({ ...fields, return_reason: null, returned_at: null }).eq('id', resendBk.id)
+      if (error) { setSubmitting(false); toast('خطأ في الحفظ', 'error'); console.error(error); return }
+      await supabase.from('payments').delete().eq('record_type', 'booking').eq('record_id', String(resendBk.id)).eq('kind', 'initial')
+      // the water box went back to the stock when it was returned; it goes out again now
+      if (water) await supabase.rpc('adjust_inventory', { p_name: 'مياه', p_size: '', p_qty: -1 })
+      await insertInitialPayments({ branch, type: 'booking', rec: { id: resendBk.id }, label: form.name.trim(), createdBy: ROLES[role]?.label, parts })
+      toast('✅ أُعيد الإرسال للمالك', 'success')
+    } else {
+      const { data, error } = await supabase.from('bookings').insert(fields).select().single()
+      if (error) { setSubmitting(false); toast('خطأ في الحفظ', 'error'); console.error(error); return }
+      await insertInitialPayments({ branch, type: 'booking', rec: data, label: form.name.trim(), createdBy: ROLES[role]?.label, parts })
+      toast('✅ تم الحفظ بنجاح', 'success')
+    }
     setSubmitting(false)
-    toast('✅ تم الحفظ بنجاح', 'success')
-    setModal(false)
-    setForm({ name:'', phone:'', date:TODAY, time:'', deposit:0, depositMethod:'نقدي', depositReceipt:'', payers:[] })
-    setWater(false); load()
+    setModal(false); setResendBk(null)
+    setForm(blankBooking); setWater(false); load()
   }
+
+  // the owner returned it: open the same form, already filled in
+  async function openResendBk(b) {
+    const { data: pays } = await supabase.from('payments').select('*').eq('record_type', 'booking').eq('record_id', String(b.id)).eq('kind', 'initial')
+    const list = [...(pays || [])]
+    let deposit = 0, depositReceipt = ''
+    const di = Number(b.deposit) > 0 ? list.findIndex(p => Number(p.amount) === Number(b.deposit) && p.method === b.deposit_method) : -1
+    if (di >= 0) { deposit = Number(list[di].amount); depositReceipt = list[di].receipt_url || ''; list.splice(di, 1) }
+    setResendBk(b); setPitch(b.pitch || 'small'); setWater(!!b.water)
+    setForm({ name: b.booker_name || '', phone: b.booker_phone || '', date: b.date, time: b.time || '', deposit, depositMethod: b.deposit_method || 'نقدي', depositReceipt,
+      payers: list.map(p => ({ method: p.method, amount: String(p.amount), receipt: p.receipt_url || '' })) })
+    setModal(true)
+  }
+  function openNewBooking() { setResendBk(null); setForm(blankBooking); setPitch('small'); setWater(false); setModal(true) }
+  function closeBooking() { setModal(false); setResendBk(null) }
 
   const monthNames = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
   const dayNames = ['ح','ن','ث','ر','خ','ج','س']
   const approvedBookings = bookings.filter(b => b.status==='approved')
   const pendingBookings = bookings.filter(b => b.status==='pending')
+  const returnedBks = bookings.filter(b => b.status==='returned' && b.created_by===ROLES[role]?.label)
   const todayBks = approvedBookings.filter(b => b.date===TODAY)
   const todayRev = todayBks.reduce((a,b) => a+Number(b.amount), 0)
   // Show revenue for whichever month is currently displayed in the calendar
   const calMonthStr = `${calYear}-${String(calMonth+1).padStart(2,'0')}`
   const monthBks = approvedBookings.filter(b => b.date?.startsWith(calMonthStr))
   const monthRev = monthBks.reduce((a,b) => a+Number(b.amount), 0)
-  const selectedBks = selectedDate ? bookings.filter(b => b.date===selectedDate) : []
+  const selectedBks = selectedDate ? bookings.filter(b => b.date===selectedDate && (b.status==='approved' || b.status==='pending')) : []
   const selectedRev = selectedBks.filter(b=>b.status==='approved').reduce((a,b) => a+Number(b.amount), 0)
   const base = pitch==='small'?250:300
 
@@ -2616,6 +2937,14 @@ function FieldsCal({ role, toast, refresh, branch }) {
       {pendingBookings.length>0 && (
         <div className="info-box info-yellow">{pendingBookings.length} حجوزات بانتظار موافقة المالك</div>
       )}
+
+      <ReturnedSection count={returnedBks.length}>
+        {returnedBks.map(b => (
+          <ReturnedCard key={b.id} title={b.booker_name} sub={`${b.pitch==='small'?'ملعب صغير':'ملعب كبير'} · ${b.date} · ${b.time||''}`} amount={b.amount}
+            reason={b.return_reason} returnedAt={b.returned_at} onEdit={() => openResendBk(b)} onDelete={() => deleteBooking(b)} />
+        ))}
+      </ReturnedSection>
+      <ReturnedPaymentsBox branch={branch} recordType="booking" createdBy={ROLES[role]?.label} refresh={refresh} toast={toast} onDone={load} />
 
       <div className="card" style={{ overflow:'hidden' }}>
         <div className="cal-header">
@@ -2664,9 +2993,10 @@ function FieldsCal({ role, toast, refresh, branch }) {
       <div className="sec">بحث في الحجوزات</div>
       <BookingSearch bookings={bookings}/>
 
-      <button className="fab" onClick={() => setModal(true)}>📅</button>
+      <button className="fab" onClick={openNewBooking}>📅</button>
 
-      <Modal open={modal} onClose={() => setModal(false)} title="حجز ملعب جديد">
+      <Modal open={modal} onClose={closeBooking} title={resendBk ? `تعديل وإعادة إرسال: ${resendBk.booker_name}` : 'حجز ملعب جديد'}>
+        {resendBk?.return_reason && <div className="info-box info-yellow">سبب الإرجاع: {resendBk.return_reason}</div>}
         <div className="form-group">
           <label className="form-label">اختر الملعب</label>
           <div className="pitch-grid">
@@ -2696,7 +3026,7 @@ function FieldsCal({ role, toast, refresh, branch }) {
             <div className="form-group" style={{marginBottom:0}}><label className="form-label">المبلغ</label><input className="form-input" type="number" min="0" value={form.deposit||''} placeholder="0" onChange={e => setForm(f=>({...f,deposit:e.target.value}))}/></div>
             <div className="form-group" style={{marginBottom:0}}><label className="form-label">الطريقة</label><PaymentBtns value={form.depositMethod} onChange={v => setForm(f=>({...f,depositMethod:v}))}/></div>
           </div>
-          {form.deposit>0&&(form.depositMethod==='شبكة'||form.depositMethod==='تحويل')&&<div style={{marginTop:8}}><ReceiptUpload label="إيصال العربون" folder="bookings" onUploaded={url => setForm(f=>({...f,depositReceipt:url}))}/></div>}
+          {form.deposit>0&&(form.depositMethod==='شبكة'||form.depositMethod==='تحويل')&&<div style={{marginTop:8}}><ReceiptUpload label="إيصال العربون" folder="bookings" current={form.depositReceipt} onUploaded={url => setForm(f=>({...f,depositReceipt:url}))}/></div>}
         </div>
 
         {/* MULTI-PAYER */}
@@ -2713,7 +3043,7 @@ function FieldsCal({ role, toast, refresh, branch }) {
                 <div className="form-group" style={{marginBottom:0}}><label className="form-label">الطريقة</label><PaymentBtns value={p.method} onChange={v=>updatePayer(i,'method',v)}/></div>
                 <button onClick={()=>removePayer(i)} style={{fontSize:10,background:'var(--red-l)',border:'none',borderRadius:6,padding:'4px 8px',color:'var(--red)',cursor:'pointer',alignSelf:'flex-end',marginBottom:4}}>✕</button>
               </div>
-              {(p.method==='شبكة'||p.method==='تحويل')&&<ReceiptUpload label={`إيصال لاعب ${i+1}`} folder="bookings" onUploaded={url=>updatePayer(i,'receipt',url)}/>}
+              {(p.method==='شبكة'||p.method==='تحويل')&&<ReceiptUpload label={`إيصال لاعب ${i+1}`} folder="bookings" current={p.receipt} onUploaded={url=>updatePayer(i,'receipt',url)}/>}
             </div>
           ))}
           {(() => {
@@ -2726,8 +3056,8 @@ function FieldsCal({ role, toast, refresh, branch }) {
             </div>
           })()}
         </div>
-        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الحفظ...':'تسجيل الحجز'}</button>
-        <button className="btn-secondary" onClick={() => setModal(false)}>إلغاء</button>
+        <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الحفظ...':resendBk?'إعادة الإرسال للمالك':'تسجيل الحجز'}</button>
+        <button className="btn-secondary" onClick={closeBooking}>إلغاء</button>
       </Modal>
 
       <PaymentModal target={payTarget} onClose={() => setPayTarget(null)} toast={toast} onDone={load} createdBy={ROLES[role]?.label}/>
@@ -2745,6 +3075,7 @@ export default function App() {
   const [syncing, setSyncing] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   const [branch, setBranch] = useState('riyadh')
+  const [badges, setBadges] = useState({})
 
   function showToast(msg, type='success') { setToastMsg(msg); setToastType(type); setTimeout(() => setToastMsg(''), 2500) }
 
@@ -2772,6 +3103,22 @@ export default function App() {
         setPendingCount(total)
       })
     }
+  }, [role, activeTab, refreshKey, branch])
+
+  // how many returned cards wait for this person, shown on the tab where they are fixed
+  useEffect(() => {
+    if (!role || role==='owner') { setBadges({}); return }
+    const label = ROLES[role]?.label, br = ROLES[role]?.branch || branch
+    const cnt = (table, col) => supabase.from(table).select('id',{count:'exact',head:true}).eq('branch', br).eq('status','returned').eq(col, label)
+    Promise.all([
+      cnt('subscribers','created_by'), cnt('sales','created_by'), cnt('bookings','created_by'), cnt('expenses','submitted_by'),
+      supabase.from('payments').select('record_type').eq('branch', br).eq('status','returned').eq('kind','later').eq('created_by', label),
+    ]).then(([sb, sl, bk, ex, py]) => {
+      const pc = {}; (py.data||[]).forEach(p => { pc[p.record_type] = (pc[p.record_type]||0)+1 })
+      setBadges(role.startsWith('admin')
+        ? { subs:(sb.count||0)+(pc.subscriber||0), inventory:(sl.count||0)+(pc.sale||0), 'my-expenses':ex.count||0 }
+        : { cal:(bk.count||0)+(pc.booking||0), 'my-expenses':ex.count||0 })
+    })
   }, [role, activeTab, refreshKey, branch])
 
   if (!role) return <LoginPage onLogin={login}/>
@@ -2805,7 +3152,7 @@ export default function App() {
     <>
       <Banner role={role} onLogout={logout} onRefresh={handleRefresh} syncing={syncing} branch={branch} setBranch={setBranch}/>
       {renderPage()}
-      <BottomNav role={role} active={activeTab} setActive={setActiveTab} pendingCount={pendingCount}/>
+      <BottomNav role={role} active={activeTab} setActive={setActiveTab} pendingCount={pendingCount} badges={badges}/>
       <Toast msg={toastMsg} type={toastType}/>
     </>
   )
