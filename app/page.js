@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
-import { supabase, approveRecord, returnRecord, cancelRecord, correctSubscription, subscriptionFlags, addDaysStr, PINS, ROLES, BRANCHES, MONTHS, EXP_CATS, EXP_COLORS, monthEnd, fmt, uploadReceipt, subStatus, daysBetween, PKG3_PRICE, bumpPaid, splitPayment, insertInitialPayments, fetchRevenue } from '../lib/supabase'
+import { supabase, approveRecord, returnRecord, cancelRecord, correctSubscription, subscriptionFlags, subscriptionFlagItems, markFlagsReviewed, FLAG_LABELS, FLAG_ORDER, addDaysStr, PINS, ROLES, BRANCHES, MONTHS, EXP_CATS, EXP_COLORS, monthEnd, fmt, uploadReceipt, subStatus, daysBetween, PKG3_PRICE, bumpPaid, splitPayment, insertInitialPayments, fetchRevenue } from '../lib/supabase'
 
 const TODAY = new Date().toISOString().slice(0, 10)
 const avColors = ['list-av-red','list-av-green','list-av-blue','list-av-yellow']
@@ -292,7 +292,9 @@ function groupInventory(items) {
   const bundle = map['حقيبة + جوارب']
   if (bundle) {
     bundle.derived = true
-    bundle.stock = Math.min(map['حقيبة']?.stock ?? 0, map['جوارب']?.stock ?? 0)
+    bundle.bagStock = map['حقيبة']?.stock ?? 0
+    bundle.socksStock = map['جوارب']?.stock ?? 0
+    bundle.stock = Math.min(bundle.bagStock, bundle.socksStock)
   }
   return groups.sort((a, b) => {
     const ai = INV_ORDER.indexOf(a.name), bi = INV_ORDER.indexOf(b.name)
@@ -310,7 +312,8 @@ function InventoryGrid({ items, onSale }) {
             <div style={{ fontSize: 28 }}>{g.icon || '📦'}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="list-name">{g.name}</div>
-              <div className="list-sub">{g.price} ر · <span style={{ color: g.stock <= 0 ? 'var(--red)' : 'var(--green)', fontWeight: 600 }}>متبقي {g.stock} {invUnit(g.name)}</span> · مباع {g.sold}</div>
+              <div className="list-sub">{g.price} ⃁ · <span style={{ color: g.stock <= 0 ? 'var(--red)' : 'var(--green)', fontWeight: 600 }}>متبقي {g.stock} {invUnit(g.name)}</span> · مباع {g.sold}</div>
+            {g.derived && <div className="list-sub" style={{ marginTop: 2 }}>حقيبة {g.bagStock} · جوارب {g.socksStock} زوج · يتاح منها {g.stock} باقة</div>}
             </div>
             {onSale && <button onClick={() => onSale(g)} style={{ fontSize: 11, background: 'var(--green-l)', border: '1px solid var(--green)', borderRadius: 6, padding: '5px 12px', color: 'var(--green)', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>تسجيل بيع</button>}
           </div>
@@ -377,10 +380,10 @@ function PaymentModal({ target, onClose, toast, onDone, createdBy }) {
     <Modal open={!!target} onClose={onClose} title={`${resend ? 'تعديل الدفعة' : 'تسجيل دفعة'}: ${name || ''}`}>
       {resend?.return_reason && <div className="info-box info-yellow">سبب الإرجاع: {resend.return_reason}</div>}
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: '.75rem' }}>
-        <span style={{ color: 'var(--t3)' }}>المدفوع: {fmt(Number(type === 'booking' ? rec?.collected : rec?.paid_amount) || 0)} ر</span>
-        <span style={{ color: 'var(--red)', fontWeight: 600 }}>المتبقي: {fmt(balance)} ر</span>
+        <span style={{ color: 'var(--t3)' }}>المدفوع: {fmt(Number(type === 'booking' ? rec?.collected : rec?.paid_amount) || 0)} ⃁</span>
+        <span style={{ color: 'var(--red)', fontWeight: 600 }}>المتبقي: {fmt(balance)} ⃁</span>
       </div>
-      <div className="form-group"><label className="form-label">مبلغ الدفعة (ر)</label><input className="form-input" type="number" min="0" value={amount} onChange={e => setAmount(e.target.value)} /></div>
+      <div className="form-group"><label className="form-label">مبلغ الدفعة (⃁)</label><input className="form-input" type="number" min="0" value={amount} onChange={e => setAmount(e.target.value)} /></div>
       <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={method} onChange={v => { setMethod(v); setReceipt('') }} /></div>
       {method !== 'نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="payments" current={receipt} onUploaded={setReceipt} />}
       <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'جاري الحفظ...' : resend ? 'إعادة الإرسال للمالك' : 'تسجيل الدفعة'}</button>
@@ -424,8 +427,8 @@ function SubscriberDetail({ sub, onClose }) {
       {loading ? <div className="loading">جاري التحميل...</div> : (
         <>
           <div className="summary-strip">
-            <div className="strip-item"><div className="strip-label">إجمالي المدفوع</div><div className="strip-val" style={{ color: 'var(--green)' }}>{fmt(paidTotal)} ر</div></div>
-            <div className="strip-item"><div className="strip-label">المتبقي</div><div className="strip-val" style={{ color: balTotal > 0 ? 'var(--red)' : 'var(--t1)' }}>{fmt(balTotal)} ر</div></div>
+            <div className="strip-item"><div className="strip-label">إجمالي المدفوع</div><div className="strip-val" style={{ color: 'var(--green)' }}>{fmt(paidTotal)} ⃁</div></div>
+            <div className="strip-item"><div className="strip-label">المتبقي</div><div className="strip-val" style={{ color: balTotal > 0 ? 'var(--red)' : 'var(--t1)' }}>{fmt(balTotal)} ⃁</div></div>
             <div className="strip-item"><div className="strip-label">فترات الاشتراك</div><div className="strip-val">{livePeriods.length}</div></div>
           </div>
           <div className="sec">الاشتراكات</div>
@@ -434,7 +437,7 @@ function SubscriberDetail({ sub, onClose }) {
               <div key={p.id} className="list-row">
                 <div>
                   <div className="list-name">{p.start_date || '؟'} ← {p.end_date || '؟'}</div>
-                  <div className="list-sub">{fmt(p.total_amount)} ر{p.has_kit ? ' · طقم' : ''}{p.has_bus ? ' · باص' : ''}{Number(p.balance) > 0 ? ` · متبقي ${fmt(p.balance)} ر` : ''}</div>
+                  <div className="list-sub">{fmt(p.total_amount)} ⃁{p.has_kit ? ' · طقم' : ''}{p.has_bus ? ' · باص' : ''}{Number(p.balance) > 0 ? ` · متبقي ${fmt(p.balance)} ⃁` : ''}</div>
                 </div>
                 <span className={`badge ${p.status === 'approved' ? 'badge-g' : p.status === 'pending' || p.status === 'returned' ? 'badge-o' : 'badge-r'}`} style={{ fontSize: 9 }}>{p.status === 'approved' ? 'معتمد' : p.status === 'pending' ? 'معلق' : p.status === 'returned' ? 'أُعيد للتعديل' : p.status === 'cancelled' ? 'ملغي' : 'مرفوض'}</span>
               </div>
@@ -446,9 +449,9 @@ function SubscriberDetail({ sub, onClose }) {
               <div key={s.id} className="list-row">
                 <div>
                   <div className="list-name">{s.item}{s.size ? ` · مقاس ${s.size}` : ''} × {s.qty}</div>
-                  <div className="list-sub">{s.created_at?.slice(0, 10)}{Number(s.balance) > 0 ? ` · متبقي ${fmt(s.balance)} ر` : ''}</div>
+                  <div className="list-sub">{s.created_at?.slice(0, 10)}{Number(s.balance) > 0 ? ` · متبقي ${fmt(s.balance)} ⃁` : ''}</div>
                 </div>
-                <span className={`badge ${s.status === 'pending' ? 'badge-o' : 'badge-g'}`}>{fmt(s.total)} ر</span>
+                <span className={`badge ${s.status === 'pending' ? 'badge-o' : 'badge-g'}`}>{fmt(s.total)} ⃁</span>
               </div>
             ))}
           </div>
@@ -457,7 +460,7 @@ function SubscriberDetail({ sub, onClose }) {
             {pays.length === 0 ? <div className="empty" style={{ padding: '1rem' }}>لا توجد دفعات</div> : pays.map(p => (
               <div key={p.id} className="list-row">
                 <div>
-                  <div className="list-name">{fmt(p.amount)} ر · {p.method}{p.note ? ` · ${p.note}` : ''}</div>
+                  <div className="list-name">{fmt(p.amount)} ⃁ · {p.method}{p.note ? ` · ${p.note}` : ''}</div>
                   <div className="list-sub">{p.paid_at}{p.receipt_url ? '' : ''}</div>
                   {p.receipt_url && <a href={p.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
                 </div>
@@ -551,13 +554,45 @@ function CorrectionModal({ rec, onClose, onDone, toast }) {
     <Modal open={!!rec} onClose={onClose} title={`تصحيح المبلغ: ${rec?.name || ''}`}>
       <div className="info-box info-blue">يُصحَّح الإجمالي والمدفوع معاً، ويُحسب الفرق في شهر الدفعة الأصلية. يُحفظ السبب في سجل المشترك.</div>
       <div className="form-row">
-        <div className="form-group"><label className="form-label">الإجمالي الصحيح (ر)</label><input className="form-input" type="number" min="0" value={total} onChange={e => setTotal(e.target.value)} /></div>
-        <div className="form-group"><label className="form-label">المدفوع الصحيح (ر)</label><input className="form-input" type="number" min="0" value={paid} onChange={e => setPaid(e.target.value)} /></div>
+        <div className="form-group"><label className="form-label">الإجمالي الصحيح (⃁)</label><input className="form-input" type="number" min="0" value={total} onChange={e => setTotal(e.target.value)} /></div>
+        <div className="form-group"><label className="form-label">المدفوع الصحيح (⃁)</label><input className="form-input" type="number" min="0" value={paid} onChange={e => setPaid(e.target.value)} /></div>
       </div>
       <div className="form-group"><label className="form-label">سبب التصحيح</label><textarea className="form-input" rows={2} value={reason} onChange={e => setReason(e.target.value)} placeholder="مثال: الإيصال يظهر 750 والبطاقة 700" /></div>
       <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'جاري الحفظ...' : 'حفظ التصحيح'}</button>
       <button className="btn-secondary" onClick={onClose}>رجوع</button>
     </Modal>
+  )
+}
+
+// how a record was paid: each payment with its method, amount and own receipt, then the totals
+function PayBreakdown({ hasMoney, total, paid, pays }) {
+  const remaining = total - paid
+  return (
+    <div style={{ background: '#fff', border: '1px solid #fde68a', borderRadius: 8, padding: '.6rem .75rem', marginTop: 8 }}>
+      {hasMoney && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid var(--border)' }}>
+          <span style={{ color: 'var(--t2)' }}>الإجمالي <b style={{ color: 'var(--t1)' }}>{fmt(total)} ⃁</b></span>
+          <span style={{ color: 'var(--t2)' }}>المدفوع <b style={{ color: 'var(--green)' }}>{fmt(paid)} ⃁</b></span>
+        </div>
+      )}
+      {pays.length === 0 && <div style={{ fontSize: 12, color: 'var(--t3)' }}>لا توجد دفعات مسجلة</div>}
+      {pays.map((p, i) => (
+        <div key={p.id || i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderTop: i ? '1px dashed var(--border)' : 'none' }}>
+          <span style={{ fontSize: 12, color: 'var(--t1)' }}>{methodIcon(p.method)} {p.method}{p.note && p.note !== 'باص' ? ` (${p.note})` : ''}</span>
+          <span style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <b style={{ fontSize: 13 }}>{fmt(p.amount)} ⃁</b>
+            {p.receipt_url
+              ? <a href={p.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>
+              : p.method !== 'نقدي' ? <span style={{ fontSize: 10, color: 'var(--red)', fontWeight: 600 }}>⚠️ بدون إيصال</span> : null}
+          </span>
+        </div>
+      ))}
+      {hasMoney && remaining > 0 && (
+        <div style={{ marginTop: 8, background: 'var(--red-l)', border: '1px solid var(--red-m)', color: 'var(--red)', borderRadius: 6, padding: '5px 8px', fontSize: 13, fontWeight: 700, textAlign: 'center' }}>
+          المتبقي {fmt(remaining)} ⃁
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -589,31 +624,7 @@ function ApprovalCard({ item, onApprove, onReturn }) {
         </div>
       )}
 
-      <div style={{ background: '#fff', border: '1px solid #fde68a', borderRadius: 8, padding: '.6rem .75rem', marginTop: 8 }}>
-        {hasMoney && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid var(--border)' }}>
-            <span style={{ color: 'var(--t2)' }}>الإجمالي <b style={{ color: 'var(--t1)' }}>{fmt(total)} ر</b></span>
-            <span style={{ color: 'var(--t2)' }}>المدفوع <b style={{ color: 'var(--green)' }}>{fmt(paid)} ر</b></span>
-          </div>
-        )}
-        {pays.length === 0 && <div style={{ fontSize: 12, color: 'var(--t3)' }}>لا توجد دفعات مسجلة</div>}
-        {pays.map((p, i) => (
-          <div key={p.id || i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderTop: i ? '1px dashed var(--border)' : 'none' }}>
-            <span style={{ fontSize: 12, color: 'var(--t1)' }}>{methodIcon(p.method)} {p.method}{p.note && p.note !== 'باص' ? ` (${p.note})` : ''}</span>
-            <span style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              <b style={{ fontSize: 13 }}>{fmt(p.amount)} ر</b>
-              {p.receipt_url
-                ? <a href={p.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>
-                : p.method !== 'نقدي' ? <span style={{ fontSize: 10, color: 'var(--red)', fontWeight: 600 }}>⚠️ بدون إيصال</span> : null}
-            </span>
-          </div>
-        ))}
-        {hasMoney && remaining > 0 && (
-          <div style={{ marginTop: 8, background: 'var(--red-l)', border: '1px solid var(--red-m)', color: 'var(--red)', borderRadius: 6, padding: '5px 8px', fontSize: 13, fontWeight: 700, textAlign: 'center' }}>
-            المتبقي {fmt(remaining)} ر
-          </div>
-        )}
-      </div>
+      <PayBreakdown hasMoney={hasMoney} total={total} paid={paid} pays={pays} />
 
       <div style={{ display: 'flex', gap: '1rem', marginTop: '1.1rem', paddingTop: '.9rem', borderTop: '1px solid #fcd34d' }}>
         <button onClick={() => onReturn(item)} style={{ flex: 1, padding: '.6rem', fontSize: 13, fontFamily: 'inherit', cursor: 'pointer', background: '#fff', color: 'var(--orange)', border: '1.5px solid var(--orange)', borderRadius: 8, fontWeight: 600 }}>↩ إرجاع للتعديل</button>
@@ -674,7 +685,7 @@ function ReturnedCard({ title, sub, amount, reason, returnedAt, onEdit, onDelete
     <div style={{ border: '1px solid var(--orange)', background: 'var(--orange-l)', borderRadius: 'var(--r)', padding: '.8rem 1rem', marginBottom: '.6rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
         <div><div className="list-name">{title}</div><div className="list-sub">{sub}</div></div>
-        {amount != null && <b style={{ fontSize: 13, flexShrink: 0 }}>{fmt(amount)} ر</b>}
+        {amount != null && <b style={{ fontSize: 13, flexShrink: 0 }}>{fmt(amount)} ⃁</b>}
       </div>
       <div style={{ background: '#fff', border: '1px solid #fde68a', borderRadius: 8, padding: '.5rem .65rem', marginTop: 8, fontSize: 12, color: 'var(--t1)' }}>
         <div style={{ fontSize: 10, color: 'var(--orange)', fontWeight: 700, marginBottom: 2 }}>سبب الإرجاع{returnedAt ? ` · ${fmtDay(returnedAt)}` : ''}</div>
@@ -776,6 +787,7 @@ function OwnerDashboard({ toast, refresh, branch }) {
   const [expiringSoon, setExpiringSoon] = useState([])
   const [flagList, setFlagList] = useState([])
   const [showFlags, setShowFlags] = useState(false)
+  const [openGroups, setOpenGroups] = useState({})
   const [pitchUtil, setPitchUtil] = useState({ rate:0, bookedHours:0, availableHours:0 })
   const [loading, setLoading] = useState(true)
   const [archiveFilter, setArchiveFilter] = useState('all')
@@ -832,7 +844,7 @@ function OwnerDashboard({ toast, refresh, branch }) {
     setPitchUtil({ rate: Math.round((bks.length/availableSlots)*100), bookedHours: bks.length*2, availableHours: availableSlots*2 })
 
     setExpiringSoon(subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d !== null && d >= 0 && d <= 14 }).sort((a,b) => daysBetween(TODAY,a.end_date)-daysBetween(TODAY,b.end_date)))
-    setFlagList(subs.map(s => ({ s, reasons: subscriptionFlags(s, subs) })).filter(x => x.reasons.length))
+    setFlagList(subs.map(s => ({ s, items: subscriptionFlagItems(s, subs) })).filter(x => x.items.length))
 
     // everything waiting for the owner, with the payments entered together with it
     const [pBk, pEx, pSl, pSub, pPay] = await Promise.all([
@@ -881,6 +893,20 @@ function OwnerDashboard({ toast, refresh, branch }) {
     await approveRecord(item._type, item)
     toast('✅ تمت الموافقة','success'); load(month); loadArchive(archiveMonth)
   }
+  async function reviewItem(sRow, item) {
+    await markFlagsReviewed(sRow, [item])
+    toast('✅ تمت المراجعة', 'success'); load(month)
+  }
+  async function reviewGroup(g) {
+    if (!confirm(`تعليم ${g.rows.length} اشتراك كمراجَع؟`)) return
+    await Promise.all(g.rows.map(r => markFlagsReviewed(r.s, [r.item])))
+    toast(`✅ تمت مراجعة ${g.rows.length}`, 'success'); load(month)
+  }
+  const flagGroups = FLAG_ORDER.map(code => ({
+    code, label: FLAG_LABELS[code],
+    rows: flagList.filter(x => x.items.some(i => i.code === code)).map(x => ({ s: x.s, item: x.items.find(i => i.code === code) })),
+  })).filter(g => g.rows.length)
+
   async function confirmReason(reason) {
     const { mode, item } = reasonFor
     if (mode === 'return') await returnRecord(item._type, item, reason)
@@ -916,13 +942,13 @@ function OwnerDashboard({ toast, refresh, branch }) {
       <div className="kpi-grid">
         <div className="kpi kpi-accent kpi-full">
           <div className="kpi-label">صافي الربح</div>
-          <div className={`kpi-val ${profit>=0?'kpi-val-g':'kpi-val-r'}`}>{(profit>=0?'+':'')+fmt(profit)} ر</div>
+          <div className={`kpi-val ${profit>=0?'kpi-val-g':'kpi-val-r'}`}>{(profit>=0?'+':'')+fmt(profit)} ⃁</div>
           <div className="kpi-sub">إيرادات مستلمة {fmt(totalRev)} · مصاريف {fmt(stats.exp)}</div>
         </div>
-        <div className="kpi"><div className="kpi-label">الاشتراكات</div><div className="kpi-val kpi-val-g">{fmt(stats.subRev)} ر</div><div className="kpi-sub">{stats.subsCount} اشتراك بدأ هذا الشهر</div></div>
-        <div className="kpi"><div className="kpi-label">الملاعب</div><div className="kpi-val kpi-val-g">{fmt(stats.pitchRev)} ر</div><div className="kpi-sub">{stats.bookingCount} حجز</div></div>
-        <div className="kpi"><div className="kpi-label">المستلزمات</div><div className="kpi-val kpi-val-g">{fmt(stats.kitRev)} ر</div></div>
-        <div className="kpi"><div className="kpi-label">المصاريف</div><div className="kpi-val kpi-val-r">{fmt(stats.exp)} ر</div></div>
+        <div className="kpi"><div className="kpi-label">الاشتراكات</div><div className="kpi-val kpi-val-g">{fmt(stats.subRev)} ⃁</div><div className="kpi-sub">{stats.subsCount} اشتراك بدأ هذا الشهر</div></div>
+        <div className="kpi"><div className="kpi-label">الملاعب</div><div className="kpi-val kpi-val-g">{fmt(stats.pitchRev)} ⃁</div><div className="kpi-sub">{stats.bookingCount} حجز</div></div>
+        <div className="kpi"><div className="kpi-label">المستلزمات</div><div className="kpi-val kpi-val-g">{fmt(stats.kitRev)} ⃁</div></div>
+        <div className="kpi"><div className="kpi-label">المصاريف</div><div className="kpi-val kpi-val-r">{fmt(stats.exp)} ⃁</div></div>
       </div>
 
       {/* PENDING APPROVALS */}
@@ -935,23 +961,37 @@ function OwnerDashboard({ toast, refresh, branch }) {
         </div>
       )}
 
-      {/* FLAGS */}
+      {/* FLAGS: grouped by reason; a reviewed item disappears until its data changes */}
       {flagList.length > 0 && (
         <div className="card" style={{ borderColor:'var(--orange)', marginBottom:'.75rem' }}>
           <button onClick={() => setShowFlags(o => !o)} style={{ width:'100%', display:'flex', justifyContent:'space-between', alignItems:'center', padding:'.7rem 1rem', background:'transparent', border:'none', cursor:'pointer', fontFamily:'inherit' }}>
             <span style={{ fontSize:13, fontWeight:700, color:'var(--orange)' }}>⚠️ {flagList.length} اشتراك يحتاج مراجعة</span>
             <span style={{ color:'var(--orange)', fontSize:11 }}>{showFlags ? '▲' : '▼'}</span>
           </button>
-          {showFlags && flagList.map(({ s, reasons }) => (
-            <div key={s.id} className="list-row" style={{ alignItems:'flex-start' }}>
-              <div className="list-left">
-                <div className="list-av list-av-yellow">{s.name[0]}</div>
-                <div>
-                  <div className="list-name">{s.name}</div>
-                  {reasons.map(t => <div key={t} className="list-sub" style={{ color:'var(--orange)' }}>{t}</div>)}
-                </div>
+          {showFlags && flagGroups.map(g => (
+            <div key={g.code} style={{ borderTop:'1px solid var(--border)' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, padding:'.5rem 1rem' }}>
+                <button onClick={() => setOpenGroups(o => ({ ...o, [g.code]: !o[g.code] }))} style={{ flex:1, display:'flex', justifyContent:'space-between', alignItems:'center', background:'transparent', border:'none', cursor:'pointer', fontFamily:'inherit', padding:0 }}>
+                  <span style={{ fontSize:12, fontWeight:600, color:'var(--t1)' }}>{g.label} <span className="badge badge-o" style={{ fontSize:10 }}>{g.rows.length}</span></span>
+                  <span style={{ color:'var(--t3)', fontSize:11 }}>{openGroups[g.code] ? '▲' : '▼'}</span>
+                </button>
+                <button onClick={() => reviewGroup(g)} style={{ fontSize:10, background:'var(--green-l)', border:'1px solid var(--green)', borderRadius:6, padding:'3px 8px', color:'var(--green)', cursor:'pointer', fontFamily:'inherit', flexShrink:0 }}>تمت مراجعة الكل</button>
               </div>
-              <span className="badge badge-grey">{fmt(s.sub_amount)} ر</span>
+              {openGroups[g.code] && g.rows.map(({ s: sRow, item }) => (
+                <div key={sRow.id} className="list-row" style={{ alignItems:'flex-start' }}>
+                  <div className="list-left">
+                    <div className="list-av list-av-yellow">{sRow.name[0]}</div>
+                    <div>
+                      <div className="list-name">{sRow.name}</div>
+                      <div className="list-sub" style={{ color:'var(--orange)' }}>{item.text}</div>
+                    </div>
+                  </div>
+                  <div className="list-right">
+                    <span className="badge badge-grey">{fmt(sRow.sub_amount)} ⃁</span>
+                    <button onClick={() => reviewItem(sRow, item)} style={{ fontSize:9, background:'var(--green-l)', border:'1px solid var(--green)', borderRadius:5, padding:'2px 6px', color:'var(--green)', cursor:'pointer', fontFamily:'inherit', marginTop:4 }}>تمت المراجعة</button>
+                  </div>
+                </div>
+              ))}
             </div>
           ))}
         </div>
@@ -965,12 +1005,12 @@ function OwnerDashboard({ toast, refresh, branch }) {
         <div className="card" style={{ borderColor:'var(--red)' }}>
           <div style={{ padding:'.6rem 1rem', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
             <span style={{ fontSize:11, fontWeight:600, color:'var(--red)' }}>💰 مبالغ مستحقة غير مدفوعة ({owed.items.length})</span>
-            <span style={{ fontSize:13, fontWeight:700, color:'var(--red)' }}>{fmt(owed.total)} ر</span>
+            <span style={{ fontSize:13, fontWeight:700, color:'var(--red)' }}>{fmt(owed.total)} ⃁</span>
           </div>
           {owed.items.slice(0,8).map(o => (
             <div key={o.key} className="list-row">
               <div className="list-left"><div><div className="list-name">{o.name}</div><div className="list-sub">{o.kind}</div></div></div>
-              <span className="badge badge-r">{fmt(o.amount)} ر</span>
+              <span className="badge badge-r">{fmt(o.amount)} ⃁</span>
             </div>
           ))}
           {owed.items.length>8 && <div className="empty" style={{ padding:'.75rem' }}>+{owed.items.length-8} آخرين</div>}
@@ -991,7 +1031,7 @@ function OwnerDashboard({ toast, refresh, branch }) {
                   <div className="donut-left"><span className="donut-dot" style={{ background:r.color }}/>{r.label}</div>
                   <div style={{ display:'flex', alignItems:'center', gap:6 }}>
                     <span style={{ fontSize:10, color:'var(--t3)' }}>{r.pct}%</span>
-                    <span className="donut-val">{fmt(r.val)} ر</span>
+                    <span className="donut-val">{fmt(r.val)} ⃁</span>
                   </div>
                 </div>
               ))}
@@ -1021,9 +1061,9 @@ function OwnerDashboard({ toast, refresh, branch }) {
                   <span style={{ fontSize:12, color:'var(--t2)', fontWeight:500 }}>{r.label}</span>
                 </div>
                 <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                  <span style={{ fontSize:11, color:'var(--t3)' }}>{fmt(r.prev)} ر</span>
+                  <span style={{ fontSize:11, color:'var(--t3)' }}>{fmt(r.prev)} ⃁</span>
                   <span style={{ fontSize:11, color:'var(--t3)' }}>←</span>
-                  <span style={{ fontSize:12, fontWeight:700, color:'var(--t1)' }}>{fmt(r.cur)} ر</span>
+                  <span style={{ fontSize:12, fontWeight:700, color:'var(--t1)' }}>{fmt(r.cur)} ⃁</span>
                   {pct !== null && <span style={{ fontSize:10, fontWeight:700, color: diff>=0?'var(--green)':'var(--red)', background: diff>=0?'var(--green-l)':'var(--red-l)', padding:'2px 6px', borderRadius:10 }}>{diff>=0?'+':''}{pct}%</span>}
                 </div>
               </div>
@@ -1066,7 +1106,7 @@ function OwnerDashboard({ toast, refresh, branch }) {
                   <span style={{ fontSize:11, fontWeight:700, color:'var(--t3)', width:14 }}>{i+1}</span>
                   <span style={{ fontSize:11, color:'var(--t1)', fontWeight:500 }}>{s.name.split(' ').slice(0,2).join(' ')}</span>
                 </div>
-                <span style={{ fontSize:11, fontWeight:700, color:'var(--green)' }}>{fmt(s.total_amount)} ر</span>
+                <span style={{ fontSize:11, fontWeight:700, color:'var(--green)' }}>{fmt(s.total_amount)} ⃁</span>
               </div>
             ))}
         </div>
@@ -1100,7 +1140,7 @@ function OwnerDashboard({ toast, refresh, branch }) {
                   </div>
                 </div>
                 <div className="list-right">
-                  <span className={`badge ${item.status==='approved'?'badge-g':item.status==='cancelled'?'badge-grey':'badge-r'}`}>{fmt(item._amount)} ر</span>
+                  <span className={`badge ${item.status==='approved'?'badge-g':item.status==='cancelled'?'badge-grey':'badge-r'}`}>{fmt(item._amount)} ⃁</span>
                   <span style={{ fontSize:9, color:'var(--t3)', marginTop:2 }}>{statusLabel[item.status]||item.status}</span>
                   {item.status==='approved' && (
                     <div style={{ display:'flex', gap:4, marginTop:4 }}>
@@ -1179,8 +1219,8 @@ function OwnerAcademy({ toast, refresh, branch }) {
         <>
           <div className="kpi-grid">
             <div className="kpi"><div className="kpi-label">إجمالي المشتركين</div><div className="kpi-val">{subs.length}</div><div className="kpi-sub">نشط: {subs.length-expired.length}</div></div>
-            <div className="kpi"><div className="kpi-label">قيمة الاشتراكات الحالية</div><div className="kpi-val kpi-val-g">{fmt(totalSubRev)} ر</div></div>
-            {owedTotal>0 && <div className="kpi"><div className="kpi-label">مبالغ مستحقة</div><div className="kpi-val kpi-val-r">{fmt(owedTotal)} ر</div></div>}
+            <div className="kpi"><div className="kpi-label">قيمة الاشتراكات الحالية</div><div className="kpi-val kpi-val-g">{fmt(totalSubRev)} ⃁</div></div>
+            {owedTotal>0 && <div className="kpi"><div className="kpi-label">مبالغ مستحقة</div><div className="kpi-val kpi-val-r">{fmt(owedTotal)} ⃁</div></div>}
             {expiringSoon.length>0 && <div className="kpi kpi-full" style={{ borderColor:'var(--orange)', background:'var(--orange-l)' }}><div className="kpi-label" style={{ color:'var(--orange)' }}>ينتهي قريباً</div><div className="kpi-val" style={{ color:'var(--orange)' }}>{expiringSoon.length} مشترك</div><div className="kpi-sub" style={{ color:'var(--orange)' }}>خلال 14 يوماً</div></div>}
           </div>
           <div className="info-box info-blue" style={{ display:'flex', alignItems:'center', gap:8 }}>
@@ -1206,13 +1246,13 @@ function OwnerAcademy({ toast, refresh, branch }) {
                       <div className={`list-av ${avColors[i%4]}`}>{s.name[0]}</div>
                       <div style={{ minWidth:0 }}>
                         <div className="list-name">{s.name}</div>
-                        <div className="list-sub">{s.sub_amount>0?`${fmt(s.sub_amount)} ر`:''}{s.type==='family'?` · عائلة ${s.members_count||''} أفراد`:''}{s.has_bus?' · باص':''}{s.has_kit?' · طقم':''}{s.end_date?` · حتى ${s.end_date}`:''}{s.guardian_phone?` · ${s.guardian_phone}`:''}</div>
+                        <div className="list-sub">{s.sub_amount>0?`${fmt(s.sub_amount)} ⃁`:''}{s.type==='family'?` · عائلة ${s.members_count||''} أفراد`:''}{s.has_bus?' · باص':''}{s.has_kit?' · طقم':''}{s.end_date?` · حتى ${s.end_date}`:''}{s.guardian_phone?` · ${s.guardian_phone}`:''}</div>
                         {flags.map(t => <div key={t} className="list-sub" style={{ color:'var(--orange)' }}>⚠️ {t}</div>)}
                       </div>
                     </div>
                     <div className="list-right">
-                      <div className="list-amt">{fmt(s.total_amount||s.sub_amount)} ر</div>
-                      {Number(s.balance)>0 && <div style={{ fontSize:10, color:'var(--red)', fontWeight:600 }}>متبقي {fmt(s.balance)} ر</div>}
+                      <div className="list-amt">{fmt(s.total_amount||s.sub_amount)} ⃁</div>
+                      {Number(s.balance)>0 && <div style={{ fontSize:10, color:'var(--red)', fontWeight:600 }}>متبقي {fmt(s.balance)} ⃁</div>}
                       <span className={`badge ${st.cls}`} style={{ fontSize:9, marginTop:3 }}>{st.label}</span>
                       <div style={{ display:'flex', gap:4, marginTop:4 }}>
                         <button onClick={() => setCorrRec(s)} style={{ ...tiny, background:'var(--surface2)', border:'1px solid var(--border)', color:'var(--t2)' }}>تصحيح المبلغ</button>
@@ -1230,9 +1270,9 @@ function OwnerAcademy({ toast, refresh, branch }) {
         <>
           <div className="kpi-grid">
             <div className="kpi"><div className="kpi-label">مستخدمو الباص</div><div className="kpi-val">{busCount}</div><div className="kpi-sub">من {subs.length} مشترك</div></div>
-            <div className="kpi"><div className="kpi-label">المبلغ المحصل للباص</div><div className="kpi-val">{fmt(busRev)} ر</div><div className="kpi-sub" style={{ color:'var(--orange)', fontSize:10 }}>يُحوَّل لأصحاب الباص</div></div>
+            <div className="kpi"><div className="kpi-label">رسوم الباص للمشتركين الحاليين</div><div className="kpi-val">{fmt(busRev)} ⃁</div><div className="kpi-sub" style={{ color:'var(--orange)', fontSize:10 }}>يُحوَّل لأصحاب الباص</div></div>
             <div className="kpi"><div className="kpi-label">اشتروا طقم</div><div className="kpi-val">{kitCount} مشترك</div></div>
-            <div className="kpi"><div className="kpi-label">إيراد الطقم</div><div className="kpi-val kpi-val-g">{fmt(kitRev)} ر</div></div>
+            <div className="kpi"><div className="kpi-label">إيراد الطقم</div><div className="kpi-val kpi-val-g">{fmt(kitRev)} ⃁</div></div>
           </div>
           <div className="sec">المخزون</div>
           <InventoryGrid items={inventory} />
@@ -1307,26 +1347,26 @@ function OwnerFields({ toast, refresh, branch }) {
           <div className="kpi-grid">
             <div className="kpi kpi-accent kpi-full">
               <div className="kpi-label">إجمالي إيرادات الملاعب</div>
-              <div className="kpi-val">{fmt(smallRev+bigRev+waterCount*20)} ر</div>
+              <div className="kpi-val">{fmt(smallRev+bigRev+waterCount*20)} ⃁</div>
               <div className="kpi-sub">{monthBks.length} حجز · {waterCount} صندوق مياه</div>
             </div>
           </div>
           <div className="field-card">
-            <div className="field-name">ملعب صغير · 250 ر / 2 ساعات</div>
+            <div className="field-name">ملعب صغير · 250 ⃁ / 2 ساعات</div>
             <div className="field-status">8 مساءً – 4 صباحاً</div>
             <div className="field-stats">
-              <div><div className="fs-label">الإيراد</div><div className="fs-val">{fmt(smallRev)} ر</div></div>
+              <div><div className="fs-label">الإيراد</div><div className="fs-val">{fmt(smallRev)} ⃁</div></div>
               <div><div className="fs-label">الحجوزات</div><div className="fs-val">{smallCount}</div></div>
-              <div><div className="fs-label">متوسط/حجز</div><div className="fs-val">{smallCount>0?fmt(Math.round(smallRev/smallCount)):0} ر</div></div>
+              <div><div className="fs-label">متوسط/حجز</div><div className="fs-val">{smallCount>0?fmt(Math.round(smallRev/smallCount)):0} ⃁</div></div>
             </div>
           </div>
           <div className="field-card">
-            <div className="field-name">ملعب كبير · 300 ر / 2 ساعات</div>
+            <div className="field-name">ملعب كبير · 300 ⃁ / 2 ساعات</div>
             <div className="field-status">8 مساءً – 4 صباحاً</div>
             <div className="field-stats">
-              <div><div className="fs-label">الإيراد</div><div className="fs-val">{fmt(bigRev)} ر</div></div>
+              <div><div className="fs-label">الإيراد</div><div className="fs-val">{fmt(bigRev)} ⃁</div></div>
               <div><div className="fs-label">الحجوزات</div><div className="fs-val">{bigCount}</div></div>
-              <div><div className="fs-label">متوسط/حجز</div><div className="fs-val">{bigCount>0?fmt(Math.round(bigRev/bigCount)):0} ر</div></div>
+              <div><div className="fs-label">متوسط/حجز</div><div className="fs-val">{bigCount>0?fmt(Math.round(bigRev/bigCount)):0} ⃁</div></div>
             </div>
           </div>
         </>
@@ -1337,7 +1377,7 @@ function OwnerFields({ toast, refresh, branch }) {
           <div className="summary-strip">
             <div className="strip-item"><div className="strip-label">اليوم المحدد</div><div className="strip-val">{selectedDate||'—'}</div></div>
             <div className="strip-item"><div className="strip-label">الحجوزات</div><div className="strip-val">{selectedBks.length}</div></div>
-            <div className="strip-item"><div className="strip-label">الإيراد</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(selectedRev)} ر</div></div>
+            <div className="strip-item"><div className="strip-label">الإيراد</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(selectedRev)} ⃁</div></div>
           </div>
           <div className="card" style={{ overflow:'hidden' }}>
             <div className="cal-header">
@@ -1370,7 +1410,7 @@ function OwnerFields({ toast, refresh, branch }) {
                       </div>
                     </div>
                     <div className="list-right">
-                      <span className={`badge ${b.pitch==='small'?'badge-b':'badge-r'}`}>{fmt(b.amount)} ر</span>
+                      <span className={`badge ${b.pitch==='small'?'badge-b':'badge-r'}`}>{fmt(b.amount)} ⃁</span>
                       {b.status==='pending' && <button onClick={async () => { if(confirm('هل تريد حذف هذا الحجز؟')) { await supabase.from('bookings').delete().eq('id',b.id); const {data} = await supabase.from('bookings').select('*').eq('branch', branch).eq('status','approved').order('date',{ascending:false}); setBookings(data||[]) } }}
                         style={{ fontSize:9, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:5, padding:'2px 6px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit', marginTop:3 }}>حذف</button>}
                     </div>
@@ -1407,7 +1447,7 @@ function BookingSearch({ bookings }) {
                     <div className="list-sub">{b.date} · {b.time} · {b.pitch==='small'?'ملعب صغير':'ملعب كبير'} · {b.payment_method}</div>
                   </div>
                 </div>
-                <span className={`badge ${b.pitch==='small'?'badge-b':'badge-r'}`}>{fmt(b.amount)} ر</span>
+                <span className={`badge ${b.pitch==='small'?'badge-b':'badge-r'}`}>{fmt(b.amount)} ⃁</span>
               </div>
             ))}
       </div>
@@ -1473,7 +1513,7 @@ function OwnerExpenses({ toast, refresh, branch }) {
             </select>
           </div>
           <div className="kpi-grid">
-            <div className="kpi kpi-full"><div className="kpi-label">إجمالي المصاريف المعتمدة</div><div className="kpi-val kpi-val-r">{fmt(total)} ر</div></div>
+            <div className="kpi kpi-full"><div className="kpi-label">إجمالي المصاريف المعتمدة</div><div className="kpi-val kpi-val-r">{fmt(total)} ⃁</div></div>
           </div>
           {!loading && labels.length>0 && (
             <div className="card">
@@ -1485,7 +1525,7 @@ function OwnerExpenses({ toast, refresh, branch }) {
                   {labels.map((l,i) => (
                     <div key={l} className="donut-row">
                       <div className="donut-left"><span className="donut-dot" style={{ background:colors[i] }}/>{l}</div>
-                      <span className="donut-val">{fmt(vals[i])} ر</span>
+                      <span className="donut-val">{fmt(vals[i])} ⃁</span>
                     </div>
                   ))}
                 </div>
@@ -1505,7 +1545,7 @@ function OwnerExpenses({ toast, refresh, branch }) {
                       {e.receipt_url && <a href={e.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
                     </div>
                   </div>
-                  <span className="badge badge-r">{fmt(e.amount)} ر</span>
+                  <span className="badge badge-r">{fmt(e.amount)} ⃁</span>
                 </div>
               ))}
           </div>
@@ -1523,19 +1563,19 @@ function OwnerExpenses({ toast, refresh, branch }) {
                   <div style={{ padding:'.75rem 1rem', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                     <span style={{ fontSize:13, fontWeight:700, color:'var(--t1)' }}>{mLabel}</span>
                     <div style={{ display:'flex', gap:6 }}>
-                      <span className={`badge ${r.netExLoan>=0?'badge-g':'badge-r'}`} style={{ fontSize:10 }}>بدون قرض: {r.netExLoan>=0?'+':''}{fmt(r.netExLoan)} ر</span>
-                      <span className={`badge ${r.net>=0?'badge-g':'badge-r'}`} style={{ fontSize:10 }}>الصافي: {r.net>=0?'+':''}{fmt(r.net)} ر</span>
+                      <span className={`badge ${r.netExLoan>=0?'badge-g':'badge-r'}`} style={{ fontSize:10 }}>بدون قرض: {r.netExLoan>=0?'+':''}{fmt(r.netExLoan)} ⃁</span>
+                      <span className={`badge ${r.net>=0?'badge-g':'badge-r'}`} style={{ fontSize:10 }}>الصافي: {r.net>=0?'+':''}{fmt(r.net)} ⃁</span>
                     </div>
                   </div>
-                  <div className="pnl-row"><span className="pnl-label">إيراد الملاعب</span><span className="pnl-val" style={{ color:'var(--green)' }}>{fmt(r.pitchRev)} ر</span></div>
-                  <div className="pnl-row"><span className="pnl-label">إيراد الاشتراكات</span><span className="pnl-val" style={{ color:'var(--green)' }}>{fmt(r.subRev)} ر</span></div>
-                  <div className="pnl-row"><span className="pnl-label">المستلزمات</span><span className="pnl-val" style={{ color:'var(--green)' }}>{fmt(r.kitRev)} ر</span></div>
-                  <div className="pnl-row" style={{ background:'var(--surface2)' }}><span className="pnl-label" style={{ fontWeight:600 }}>إجمالي الإيرادات</span><span className="pnl-val" style={{ color:'var(--green)', fontWeight:700 }}>{fmt(r.totalRev)} ر</span></div>
-                  <div className="pnl-row"><span className="pnl-label">المصاريف التشغيلية</span><span className="pnl-val" style={{ color:'var(--red)' }}>{fmt(r.operExp)} ر</span></div>
-                  {r.loanExp > 0 && <div className="pnl-row"><span className="pnl-label">القرض</span><span className="pnl-val" style={{ color:'var(--orange)' }}>{fmt(r.loanExp)} ر</span></div>}
+                  <div className="pnl-row"><span className="pnl-label">إيراد الملاعب</span><span className="pnl-val" style={{ color:'var(--green)' }}>{fmt(r.pitchRev)} ⃁</span></div>
+                  <div className="pnl-row"><span className="pnl-label">إيراد الاشتراكات</span><span className="pnl-val" style={{ color:'var(--green)' }}>{fmt(r.subRev)} ⃁</span></div>
+                  <div className="pnl-row"><span className="pnl-label">المستلزمات</span><span className="pnl-val" style={{ color:'var(--green)' }}>{fmt(r.kitRev)} ⃁</span></div>
+                  <div className="pnl-row" style={{ background:'var(--surface2)' }}><span className="pnl-label" style={{ fontWeight:600 }}>إجمالي الإيرادات</span><span className="pnl-val" style={{ color:'var(--green)', fontWeight:700 }}>{fmt(r.totalRev)} ⃁</span></div>
+                  <div className="pnl-row"><span className="pnl-label">المصاريف التشغيلية</span><span className="pnl-val" style={{ color:'var(--red)' }}>{fmt(r.operExp)} ⃁</span></div>
+                  {r.loanExp > 0 && <div className="pnl-row"><span className="pnl-label">القرض</span><span className="pnl-val" style={{ color:'var(--orange)' }}>{fmt(r.loanExp)} ⃁</span></div>}
                   <div className="pnl-row" style={{ background:'var(--black)' }}>
                     <span style={{ color:'rgba(255,255,255,.7)', fontSize:13, fontWeight:600 }}>صافي الربح</span>
-                    <span style={{ color: r.net>=0?'var(--green)':'var(--red)', fontSize:15, fontWeight:700 }}>{r.net>=0?'+':''}{fmt(r.net)} ر</span>
+                    <span style={{ color: r.net>=0?'var(--green)':'var(--red)', fontSize:15, fontWeight:700 }}>{r.net>=0?'+':''}{fmt(r.net)} ⃁</span>
                   </div>
                 </div>
               )
@@ -1552,11 +1592,11 @@ function LineAmount({ f, setF, ovKey, base, finalVal, color }) {
   return (
     <>
       <div className="form-group" style={{ marginBottom: 4 }}>
-        <label className="form-label">السعر النهائي (ر)</label>
+        <label className="form-label">السعر النهائي (⃁)</label>
         <input className="form-input" type="number" min="0" placeholder={String(base)} value={f[ovKey] ?? ''} onChange={e => setF(ff => ({ ...ff, [ovKey]: e.target.value }))} />
       </div>
       <div style={{ textAlign: 'left', fontSize: 14, fontWeight: 700, color }}>
-        {fmt(finalVal)} ر {base !== finalVal && <span style={{ fontSize: 10, color: 'var(--t3)', fontWeight: 400 }}>(بدلاً من {fmt(base)} ر)</span>}
+        {fmt(finalVal)} ⃁ {base !== finalVal && <span style={{ fontSize: 10, color: 'var(--t3)', fontWeight: 400 }}>(بدلاً من {fmt(base)} ⃁)</span>}
       </div>
     </>
   )
@@ -1572,8 +1612,8 @@ function SubPricingForm({ f, setF, BUS_PRICES, inventory }) {
   const box = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '.75rem', marginBottom: '.5rem' }
   const quick = { flex: 1, fontSize: 11, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 0', color: 'var(--t2)', cursor: 'pointer', fontFamily: 'inherit' }
   const baseLabel = f.isPkg && months === 3
-    ? `باقة ${PKG3_PRICE} ر${members > 1 ? ` × ${members} أفراد` : ''}`
-    : `300 ر × ${months} ${months === 1 ? 'شهر' : 'أشهر'}${members > 1 ? ` × ${members} أفراد` : ''} = ${fmt(t.subBase)} ر`
+    ? `باقة ${PKG3_PRICE} ⃁${members > 1 ? ` × ${members} أفراد` : ''}`
+    : `300 ⃁ × ${months} ${months === 1 ? 'شهر' : 'أشهر'}${members > 1 ? ` × ${members} أفراد` : ''} = ${fmt(t.subBase)} ⃁`
 
   return (
     <>
@@ -1606,7 +1646,7 @@ function SubPricingForm({ f, setF, BUS_PRICES, inventory }) {
       {months === 3 && (
         <div className="form-group">
           <div className="water-toggle" onClick={() => setF(ff => ({ ...ff, isPkg: !ff.isPkg, subOverride: '' }))}>
-            <div className="water-toggle-left"><span style={{ fontSize: 18 }}>⭐</span><div><div style={{ fontSize: 13, fontWeight: 500, color: 'var(--t1)' }}>باقة {PKG3_PRICE} ر (3 أشهر)</div><div style={{ fontSize: 11, color: 'var(--t3)' }}>بدونها سعر 3 أشهر كاملاً {fmt(900 * members)} ر</div></div></div>
+            <div className="water-toggle-left"><span style={{ fontSize: 18 }}>⭐</span><div><div style={{ fontSize: 13, fontWeight: 500, color: 'var(--t1)' }}>باقة {PKG3_PRICE} ⃁ (3 أشهر)</div><div style={{ fontSize: 11, color: 'var(--t3)' }}>بدونها سعر 3 أشهر كاملاً {fmt(900 * members)} ⃁</div></div></div>
             <div className={`toggle-switch ${f.isPkg ? 'toggle-on' : ''}`} />
           </div>
         </div>
@@ -1685,9 +1725,9 @@ function SubPricingForm({ f, setF, BUS_PRICES, inventory }) {
       <div style={{ ...box, marginBottom: '.75rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
           <span style={{ color: 'var(--t1)' }}>الإجمالي</span>
-          <span style={{ color: 'var(--red)' }}>{fmt(t.total)} ر</span>
+          <span style={{ color: 'var(--red)' }}>{fmt(t.total)} ⃁</span>
         </div>
-        {t.discountGiven > 0 && <div style={{ fontSize: 11, color: 'var(--orange)', marginBottom: 6 }}>خصم ممنوح: {fmt(t.discountGiven)} ر</div>}
+        {t.discountGiven > 0 && <div style={{ fontSize: 11, color: 'var(--orange)', marginBottom: 6 }}>خصم ممنوح: {fmt(t.discountGiven)} ⃁</div>}
         <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--t1)', margin: '8px 0 6px' }}>تفصيل الدفع</div>
         <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
           {[['نقدي كاملاً', 'cashAmt'], ['شبكة كاملاً', 'networkAmt'], ['تحويل كاملاً', 'transferAmt']].map(([l, k]) => (
@@ -1702,9 +1742,9 @@ function SubPricingForm({ f, setF, BUS_PRICES, inventory }) {
         {Number(f.networkAmt) > 0 && <ReceiptUpload label="إيصال الشبكة" folder="subscribers" current={f.networkReceipt} onUploaded={url => setF(ff => ({ ...ff, networkReceipt: url }))} />}
         {Number(f.transferAmt) > 0 && <ReceiptUpload label="إيصال التحويل" folder="subscribers" current={f.transferReceipt} onUploaded={url => setF(ff => ({ ...ff, transferReceipt: url }))} />}
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginTop: 4 }}>
-          <span style={{ color: 'var(--t3)' }}>المدفوع: {fmt(totalPaid)} ر</span>
+          <span style={{ color: 'var(--t3)' }}>المدفوع: {fmt(totalPaid)} ⃁</span>
           <span style={{ color: remaining <= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
-            {remaining === 0 ? '✅ مكتمل' : remaining < 0 ? `المدفوع أكبر بـ ${fmt(-remaining)} ر` : `متبقي: ${fmt(remaining)} ر`}
+            {remaining === 0 ? '✅ مكتمل' : remaining < 0 ? `المدفوع أكبر بـ ${fmt(-remaining)} ⃁` : `متبقي: ${fmt(remaining)} ⃁`}
           </span>
         </div>
         {remaining > 0 && <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4 }}>المتبقي يُسجَّل مستحقاً ويمكن تسجيل دفعة عليه لاحقاً.</div>}
@@ -1734,6 +1774,7 @@ function StaffSubs({ toast, refresh, branch }) {
   const [detailSub, setDetailSub] = useState(null)
   const [payTarget, setPayTarget] = useState(null)
   const [inventory, setInventory] = useState([])
+  const [pendPays, setPendPays] = useState({})
   const [freezeModal, setFreezeModal] = useState(false)
   const [freezeSub, setFreezeSub] = useState(null)
   const [freezeDays, setFreezeDays] = useState(7)
@@ -1746,11 +1787,13 @@ function StaffSubs({ toast, refresh, branch }) {
   const [submitting, setSubmitting] = useState(false)
 
   async function load() {
-    const [s, br, inv] = await Promise.all([
+    const [s, br, inv, pp] = await Promise.all([
       supabase.from('subscribers').select('*').eq('branch', branch).order('created_at',{ascending:false}),
       supabase.from('academy_breaks').select('*').eq('branch', branch).order('created_at',{ascending:false}),
       supabase.from('inventory').select('*').in('name',['طقم صيفي (جيرسي + شورت)','طقم شتوي']),
+      supabase.from('payments').select('*').eq('branch', branch).eq('record_type','subscriber').eq('kind','initial').eq('status','pending'),
     ])
+    const pm = {}; (pp.data||[]).forEach(p => { (pm[p.record_id] = pm[p.record_id] || []).push(p) }); setPendPays(pm)
     setSubs((s.data||[]).filter(x=>x.is_current!==false).sort(newestFirst)); setBreaks(br.data||[]); setInventory(inv.data||[]); setLoading(false)
   }
   useEffect(() => { load() }, [refresh, branch])
@@ -1962,8 +2005,8 @@ function StaffSubs({ toast, refresh, branch }) {
     <div className="page">
       <div className="summary-strip">
         <div className="strip-item"><div className="strip-label">المشتركون</div><div className="strip-val">{approvedSubs.length}</div></div>
-        <div className="strip-item"><div className="strip-label">الإجمالي</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(totalRev)} ر</div></div>
-        {owedTotal>0 && <div className="strip-item"><div className="strip-label">مستحقات</div><div className="strip-val" style={{ color:'var(--red)' }}>{fmt(owedTotal)} ر</div></div>}
+        <div className="strip-item"><div className="strip-label">قيمة الاشتراكات الحالية</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(totalRev)} ⃁</div></div>
+        {owedTotal>0 && <div className="strip-item"><div className="strip-label">مستحقات</div><div className="strip-val" style={{ color:'var(--red)' }}>{fmt(owedTotal)} ⃁</div></div>}
         {pendingSubs.length>0 && <div className="strip-item"><div className="strip-label">معلق</div><div className="strip-val" style={{ color:'var(--orange)' }}>{pendingSubs.length}</div></div>}
         {returnedSubs.length>0 && <div className="strip-item"><div className="strip-label">أُعيد</div><div className="strip-val" style={{ color:'var(--orange)' }}>{returnedSubs.length}</div></div>}
       </div>
@@ -2052,24 +2095,39 @@ function StaffSubs({ toast, refresh, branch }) {
       {/* EXPIRING SOON: collapsed until opened */}
       <ExpiringBox rows={expiringSoon} onRenew={openRenew} />
 
-      {/* PENDING */}
+      {/* PENDING: the same detail the owner sees */}
       {pendingSubs.length>0 && (
         <>
           <div className="sec">معلق - بانتظار موافقة المالك</div>
-          <div className="card">
-            {pendingSubs.map(s => (
-              <div key={s.id} className="list-row">
-                <div className="list-left">
-                  <div className="list-av list-av-yellow">{s.name[0]}</div>
-                  <div><div className="list-name">{s.name}{s.renewal_of?' (تجديد)':''}</div><div className="list-sub">{fmt(s.total_amount)} ر · مدفوع {fmt(s.paid_amount||0)} ر · {s.payment_method}</div></div>
+          {pendingSubs.map(s => {
+            const pays = pendPays[String(s.id)] || []
+            const paid = pays.length ? pays.reduce((a,p) => a+Number(p.amount||0), 0) : Number(s.paid_amount||0)
+            const m = Number(s.months) || 1
+            const tags = [
+              `${m} ${m===1?'شهر':'أشهر'}`,
+              s.type==='family' ? `عائلة · ${s.members_count||'?'} أفراد` : null,
+              s.has_kit ? `طقم ${s.kit_item==='طقم شتوي'?'شتوي':'صيفي'}${s.kit_size?` · مقاس ${s.kit_size}`:''}` : null,
+              s.has_bus ? `باص · ${s.bus_months||1} ${(s.bus_months||1)===1?'شهر':'أشهر'}` : null,
+            ].filter(Boolean)
+            return (
+              <div key={s.id} className="card" style={{ marginBottom:'.6rem', padding:'.85rem 1rem' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
+                  <div>
+                    <div className="list-name">{s.name}{s.renewal_of?' (تجديد)':''}</div>
+                    <div className="list-sub">{s.start_date||''} ← {s.end_date||''}{s.guardian_phone?` · 📞 ${s.guardian_phone}`:''}</div>
+                  </div>
+                  <span className="badge badge-o" style={{ fontSize:10, flexShrink:0 }}>معلق</span>
                 </div>
-                <div className="list-right">
-                  <span className="badge badge-o" style={{ fontSize:10 }}>معلق</span>
-                  <button onClick={() => deleteSub(s)} style={{ ...btn('var(--red-l)','var(--red-m)','var(--red)'), marginTop:3 }}>حذف</button>
+                <div style={{ display:'flex', flexWrap:'wrap', gap:5, marginTop:8 }}>
+                  {tags.map(t => <span key={t} style={{ fontSize:10, background:'var(--surface2)', border:'1px solid var(--border)', borderRadius:12, padding:'2px 8px', color:'var(--t2)' }}>{t}</span>)}
+                </div>
+                <PayBreakdown hasMoney total={Number(s.total_amount||0)} paid={paid} pays={pays} />
+                <div style={{ marginTop:'.8rem', paddingTop:'.7rem', borderTop:'1px solid var(--border)' }}>
+                  <button onClick={() => deleteSub(s)} style={{ ...btn('var(--red-l)','var(--red-m)','var(--red)'), fontSize:11, padding:'4px 12px' }}>حذف</button>
                 </div>
               </div>
-            ))}
-          </div>
+            )
+          })}
         </>
       )}
 
@@ -2091,13 +2149,13 @@ function StaffSubs({ toast, refresh, branch }) {
                   <div className={`list-av ${avColors[i%4]}`}>{s.name[0]}</div>
                   <div style={{ minWidth:0 }}>
                     <div className="list-name">{s.name}</div>
-                    <div className="list-sub">{s.sub_amount>0?`${fmt(s.sub_amount)} ر`:''}{s.type==='family'?` · عائلة ${s.members_count||''} أفراد`:''}{s.has_bus?' · باص':''}{s.has_kit?' · طقم':''}{s.guardian_phone?` · 📞 ${s.guardian_phone}`:''}</div>
+                    <div className="list-sub">{s.sub_amount>0?`${fmt(s.sub_amount)} ⃁`:''}{s.type==='family'?` · عائلة ${s.members_count||''} أفراد`:''}{s.has_bus?' · باص':''}{s.has_kit?' · طقم':''}{s.guardian_phone?` · 📞 ${s.guardian_phone}`:''}</div>
                     <div className="list-sub">{s.end_date?`حتى ${s.end_date}`:''}</div>
                   </div>
                 </div>
                 <div className="list-right">
-                  <div className="list-amt">{fmt(s.total_amount||s.sub_amount)} ر</div>
-                  {Number(s.balance)>0 && <div style={{ fontSize:10, color:'var(--red)', fontWeight:600 }}>متبقي {fmt(s.balance)} ر</div>}
+                  <div className="list-amt">{fmt(s.total_amount||s.sub_amount)} ⃁</div>
+                  {Number(s.balance)>0 && <div style={{ fontSize:10, color:'var(--red)', fontWeight:600 }}>متبقي {fmt(s.balance)} ⃁</div>}
                   <div style={{ display:'flex', gap:4, marginTop:3, flexWrap:'wrap', justifyContent:'flex-end' }}>
                     <span className={`badge ${st.cls}`} style={{ fontSize:9 }}>{st.label}</span>
                     {Number(s.balance)>0 && <button onClick={() => setPayTarget({ type:'subscriber', rec:s })} style={btn('var(--red-l)','var(--red-m)','var(--red)')}>دفعة</button>}
@@ -2144,8 +2202,8 @@ function StaffSubs({ toast, refresh, branch }) {
           <div className="form-group"><label className="form-label">تاريخ الانتهاء</label><input className="form-input" type="date" value={editForm.endDate} onChange={e => setEditForm(f=>({...f,endDate:e.target.value}))}/></div>
         </div>
         <div className="form-group">
-          <label className="form-label">إجمالي الاشتراك (ر)</label>
-          <input className="form-input" readOnly value={fmt(editSub?.total_amount||0)+' ر'} style={{ color:'var(--t3)', background:'var(--surface2)' }}/>
+          <label className="form-label">إجمالي الاشتراك (⃁)</label>
+          <input className="form-input" readOnly value={fmt(editSub?.total_amount||0)+' ⃁'} style={{ color:'var(--t3)', background:'var(--surface2)' }}/>
           <div className="list-sub" style={{ marginTop:4 }}>المبلغ لا يُعدَّل بعد الاعتماد. إن كان فيه خطأ يصححه المالك، وللمبلغ المتبقي استخدم تسجيل دفعة.</div>
         </div>
         <button className="btn-primary" disabled={submitting} onClick={saveEdit}>{submitting?'جاري الحفظ...':'حفظ التعديلات'}</button>
@@ -2271,12 +2329,12 @@ function StaffBus({ refresh, branch, toast }) {
           <div className="kpi-val">{subs.length} مشترك</div>
         </div>
         <div className="kpi">
-          <div className="kpi-label">المبلغ المحصل</div>
-          <div className="kpi-val">{fmt(busRev)} ر</div>
+          <div className="kpi-label">رسوم الباص للمشتركين الحاليين</div>
+          <div className="kpi-val">{fmt(busRev)} ⃁</div>
         </div>
       </div>
       <div style={{ background:'var(--orange-l)', border:'1px solid #fbbf24', borderRadius:8, padding:'.6rem .875rem', fontSize:12, color:'var(--orange)', marginBottom:'.75rem' }}>
-        ⚠️ إيراد الباص ({fmt(busRev)} ر) يُحوَّل لأصحاب الباص ولا يدخل في حسابات الأكاديمية
+        ⚠️ إيراد الباص ({fmt(busRev)} ⃁) يُحوَّل لأصحاب الباص ولا يدخل في حسابات الأكاديمية
       </div>
       <div className="sec">قائمة الباص ({q ? `${shownSubs.length} من ${subs.length}` : subs.length} مشترك)</div>
       <div className="search-wrap" style={{ borderRadius:'var(--r) var(--r) 0 0', border:'1px solid var(--border)' }}>
@@ -2294,7 +2352,7 @@ function StaffBus({ refresh, branch, toast }) {
                 </div>
               </div>
               <div className="list-right">
-                <span className="badge badge-b">{fmt(s.bus_amount||150)} ر</span>
+                <span className="badge badge-b">{fmt(s.bus_amount||150)} ⃁</span>
                 <button onClick={() => { setExtSub(s); setExtForm({...emptyBus,price:s.bus_price_per_month||150}); setExtModal(true) }}
                   style={{ fontSize:9, background:'var(--green-l)', border:'1px solid var(--green)', borderRadius:5, padding:'2px 6px', color:'var(--green)', cursor:'pointer', fontFamily:'inherit', marginTop:3 }}>تمديد</button>
               </div>
@@ -2351,12 +2409,12 @@ function StaffBus({ refresh, branch, toast }) {
               </div>
             </div>
             <div className="form-group">
-            <label className="form-label">السعر النهائي (ر)</label>
+            <label className="form-label">السعر النهائي (⃁)</label>
             <input className="form-input" type="number" min="0" placeholder={String(addBusForm.price*addBusForm.months)} value={addBusForm.override} onChange={e => setAddBusForm(f=>({...f,override:e.target.value}))}/>
           </div>
             <div className="form-group">
               <label className="form-label">الإجمالي</label>
-              <input className="form-input" readOnly value={fmt(addAmount)+' ر'} style={{ fontWeight:700, color:'var(--green)' }}/>
+              <input className="form-input" readOnly value={fmt(addAmount)+' ⃁'} style={{ fontWeight:700, color:'var(--green)' }}/>
             </div>
             <div className="list-sub" style={{ marginBottom:'.75rem' }}>
               تاريخ انتهاء الباص: {(() => { const d=new Date(TODAY); d.setMonth(d.getMonth()+addBusForm.months); return d.toISOString().slice(0,10) })()}
@@ -2383,12 +2441,12 @@ function StaffBus({ refresh, branch, toast }) {
           </div>
         </div>
         <div className="form-group">
-            <label className="form-label">السعر النهائي (ر)</label>
+            <label className="form-label">السعر النهائي (⃁)</label>
             <input className="form-input" type="number" min="0" placeholder={String(extForm.price*extForm.months)} value={extForm.override} onChange={e => setExtForm(f=>({...f,override:e.target.value}))}/>
           </div>
         <div className="form-group">
           <label className="form-label">الإجمالي</label>
-          <input className="form-input" readOnly value={fmt(extAmount)+' ر'} style={{ fontWeight:700, color:'var(--green)' }}/>
+          <input className="form-input" readOnly value={fmt(extAmount)+' ⃁'} style={{ fontWeight:700, color:'var(--green)' }}/>
         </div>
         <div className="list-sub" style={{ marginBottom:'.75rem' }}>
           تاريخ انتهاء الباص الجديد: {(() => { const d=new Date(extSub?.bus_end_date||TODAY); d.setMonth(d.getMonth()+extForm.months); return d.toISOString().slice(0,10) })()}
@@ -2521,7 +2579,7 @@ function StaffInventory({ toast, refresh, branch }) {
         </select>
       </div>
       <div className="kpi-grid">
-        <div className="kpi"><div className="kpi-label">المحصّل من المبيعات</div><div className="kpi-val kpi-val-g">{fmt(monthCollected)} ر</div></div>
+        <div className="kpi"><div className="kpi-label">المحصّل من المبيعات</div><div className="kpi-val kpi-val-g">{fmt(monthCollected)} ⃁</div></div>
         <div className="kpi"><div className="kpi-label">قطع مباعة</div><div className="kpi-val">{monthUnits} قطعة</div></div>
       </div>
 
@@ -2553,8 +2611,8 @@ function StaffInventory({ toast, refresh, branch }) {
                 </div>
               </div>
               <div className="list-right">
-                <span className="badge badge-g">{fmt(s.total)} ر</span>
-                {Number(s.balance)>0 && <span style={{ fontSize:10, color:'var(--red)', fontWeight:600 }}>متبقي {fmt(s.balance)} ر</span>}
+                <span className="badge badge-g">{fmt(s.total)} ⃁</span>
+                {Number(s.balance)>0 && <span style={{ fontSize:10, color:'var(--red)', fontWeight:600 }}>متبقي {fmt(s.balance)} ⃁</span>}
                 {s.status==='pending' && <span className="badge badge-o" style={{ fontSize:9, marginTop:3 }}>معلق</span>}
                 {s.status==='approved' && Number(s.balance)>0 && <button onClick={() => setPayTarget({ type:'sale', rec:s })}
                   style={{ fontSize:9, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:5, padding:'2px 6px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit', marginTop:3 }}>دفعة</button>}
@@ -2607,20 +2665,20 @@ function StaffInventory({ toast, refresh, branch }) {
         )}
         <div className="form-row">
           <div className="form-group"><label className="form-label">الكمية ({group?invUnit(group.name):''})</label><input className="form-input" type="number" min="1" value={form.qty} onChange={e => setForm(f=>({...f,qty:e.target.value,override:''}))}/></div>
-          <div className="form-group"><label className="form-label">سعر الوحدة</label><input className="form-input" readOnly value={fmt(group?.price||0)+' ر'}/></div>
+          <div className="form-group"><label className="form-label">سعر الوحدة</label><input className="form-input" readOnly value={fmt(group?.price||0)+' ⃁'}/></div>
         </div>
         <div className="form-group">
-          <label className="form-label">السعر النهائي (ر)</label>
+          <label className="form-label">السعر النهائي (⃁)</label>
           <input className="form-input" type="number" min="0" placeholder={String(baseTotal)} value={form.override} onChange={e => setForm(f=>({...f,override:e.target.value}))}/>
         </div>
         <div style={{ display:'flex', justifyContent:'space-between', fontSize:14, fontWeight:700, marginBottom:'.75rem' }}>
           <span style={{ color:'var(--t1)' }}>الإجمالي</span>
-          <span style={{ color:'var(--green)' }}>{fmt(total)} ر</span>
+          <span style={{ color:'var(--green)' }}>{fmt(total)} ⃁</span>
         </div>
         <div className="form-group">
           <label className="form-label">المدفوع الآن (اتركه فارغاً للدفع كاملاً)</label>
           <input className="form-input" type="number" min="0" placeholder={String(total)} value={form.paid} onChange={e => setForm(f=>({...f,paid:e.target.value}))}/>
-          {remaining>0 && <div style={{ fontSize:11, color:'var(--red)', marginTop:4 }}>سيبقى {fmt(remaining)} ر مستحقاً على المشترك</div>}
+          {remaining>0 && <div style={{ fontSize:11, color:'var(--red)', marginTop:4 }}>سيبقى {fmt(remaining)} ⃁ مستحقاً على المشترك</div>}
         </div>
         {paidNow>0 && <div className="form-group"><label className="form-label">طريقة الدفع</label><PaymentBtns value={form.method} onChange={v => setForm(f=>({...f,method:v,receiptUrl:''}))}/></div>}
         {paidNow>0 && form.method!=='نقدي' && <ReceiptUpload label="إرفاق الإيصال" folder="sales" current={form.receiptUrl} onUploaded={url => setForm(f=>({...f,receiptUrl:url}))}/>}
@@ -2710,7 +2768,7 @@ function MyExpenses({ role, toast, refresh, branch }) {
           </div>
           <div className="form-group"><input className="form-input" value={form.desc} onChange={e => setForm(f=>({...f,desc:e.target.value}))} placeholder="الوصف"/></div>
           <div className="form-row" style={{ marginBottom:'.75rem' }}>
-            <input className="form-input" type="number" value={form.amount} onChange={e => setForm(f=>({...f,amount:e.target.value}))} placeholder="المبلغ (ر)"/>
+            <input className="form-input" type="number" value={form.amount} onChange={e => setForm(f=>({...f,amount:e.target.value}))} placeholder="المبلغ (⃁)"/>
             <input className="form-input" type="date" value={form.date} onChange={e => setForm(f=>({...f,date:e.target.value}))}/>
           </div>
           <PaymentBtns value={form.payment} onChange={v => setForm(f=>({...f,payment:v,receiptUrl:''}))}/>
@@ -2730,7 +2788,7 @@ function MyExpenses({ role, toast, refresh, branch }) {
       <div className="summary-strip">
         <div className="strip-item"><div className="strip-label">معلق</div><div className="strip-val" style={{ color:'var(--red)' }}>{pending.length}</div></div>
         <div className="strip-item"><div className="strip-label">معتمد هذا الشهر</div><div className="strip-val" style={{ color:'var(--green)' }}>{approved.length}</div></div>
-        <div className="strip-item"><div className="strip-label">إجمالي معتمد</div><div className="strip-val">{fmt(approved.reduce((a,e)=>a+Number(e.amount),0))} ر</div></div>
+        <div className="strip-item"><div className="strip-label">إجمالي معتمد</div><div className="strip-val">{fmt(approved.reduce((a,e)=>a+Number(e.amount),0))} ⃁</div></div>
       </div>
 
       {pending.length>0 && (
@@ -2741,7 +2799,7 @@ function MyExpenses({ role, toast, refresh, branch }) {
               <div className="approval-head"><span style={{ fontSize:11, fontWeight:600, color:'var(--t3)' }}>{a.category}</span><span className="badge badge-o">معلق</span></div>
               <div className="approval-body">
                 <div className="approval-desc">{a.description}</div>
-                <div className="approval-meta">{a.date} · {fmt(a.amount)} ر · {a.payment_method}</div>
+                <div className="approval-meta">{a.date} · {fmt(a.amount)} ⃁ · {a.payment_method}</div>
                 {a.receipt_url && <a href={a.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
                 <button onClick={() => deleteExpense(a)}
                   style={{ fontSize:10, background:'var(--red-l)', border:'1px solid var(--red-m)', borderRadius:6, padding:'3px 10px', color:'var(--red)', cursor:'pointer', fontFamily:'inherit', marginTop:6, display:'inline-block' }}>حذف</button>
@@ -2764,7 +2822,7 @@ function MyExpenses({ role, toast, refresh, branch }) {
                   {e.receipt_url && <a href={e.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
                 </div>
               </div>
-              <span className="badge badge-g">{fmt(e.amount)} ر</span>
+              <span className="badge badge-g">{fmt(e.amount)} ⃁</span>
             </div>
           ))}
       </div>
@@ -2929,9 +2987,9 @@ function FieldsCal({ role, toast, refresh, branch }) {
   return (
     <div className="page">
       <div className="summary-strip">
-        <div className="strip-item"><div className="strip-label">{selectedDate?'إيراد اليوم المحدد':'إيراد اليوم'}</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(selectedDate?selectedRev:todayRev)} ر</div></div>
+        <div className="strip-item"><div className="strip-label">{selectedDate?'إيراد اليوم المحدد':'إيراد اليوم'}</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(selectedDate?selectedRev:todayRev)} ⃁</div></div>
         <div className="strip-item"><div className="strip-label">{selectedDate?'حجوزات اليوم المحدد':'حجوزات اليوم'}</div><div className="strip-val">{selectedDate?selectedBks.length:todayBks.length}</div></div>
-        <div className="strip-item"><div className="strip-label">إيراد {monthNames[calMonth]}</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(monthRev)} ر</div></div>
+        <div className="strip-item"><div className="strip-label">إيراد {monthNames[calMonth]}</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(monthRev)} ⃁</div></div>
       </div>
 
       {pendingBookings.length>0 && (
@@ -2973,12 +3031,12 @@ function FieldsCal({ role, toast, refresh, branch }) {
                   <div>
                     <div className="list-name">{b.booker_name}{b.booker_phone?` · 📞 ${b.booker_phone}`:''}</div>
                     <div className="list-sub">{b.pitch==='small'?'ملعب صغير':'ملعب كبير'} · {b.time} · {b.payment_method}{b.water?' · 💧':''}</div>
-                    {Number(b.balance)>0&&<div className="list-sub" style={{color:'var(--red)'}}>مدفوع {fmt(b.collected||0)} ر · متبقي {fmt(b.balance)} ر</div>}
+                    {Number(b.balance)>0&&<div className="list-sub" style={{color:'var(--red)'}}>مدفوع {fmt(b.collected||0)} ⃁ · متبقي {fmt(b.balance)} ⃁</div>}
                     {b.receipt_url && <a href={b.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
                   </div>
                 </div>
                 <div className="list-right">
-                  <span className={`badge ${b.pitch==='small'?'badge-b':'badge-r'}`}>{fmt(b.amount)} ر</span>
+                  <span className={`badge ${b.pitch==='small'?'badge-b':'badge-r'}`}>{fmt(b.amount)} ⃁</span>
                   {b.payment_status&&b.payment_status!=='مكتمل'&&<span className="badge badge-o" style={{fontSize:9,marginTop:3}}>{b.payment_status}</span>}
                   {b.status==='pending' && <span className="badge badge-o" style={{ fontSize:9, marginTop:3 }}>معلق</span>}
                   {b.status==='approved' && Number(b.balance)>0 && <button onClick={() => setPayTarget({ type:'booking', rec:b })}
@@ -3000,8 +3058,8 @@ function FieldsCal({ role, toast, refresh, branch }) {
         <div className="form-group">
           <label className="form-label">اختر الملعب</label>
           <div className="pitch-grid">
-            <div className={`pitch-card ${pitch==='small'?'pitch-selected':''}`} onClick={() => setPitch('small')}><div className="pitch-name">ملعب صغير</div><div className="pitch-price">250 ر</div><div className="pitch-sub">2 ساعات</div></div>
-            <div className={`pitch-card ${pitch==='big'?'pitch-selected':''}`} onClick={() => setPitch('big')}><div className="pitch-name">ملعب كبير</div><div className="pitch-price">300 ر</div><div className="pitch-sub">2 ساعات</div></div>
+            <div className={`pitch-card ${pitch==='small'?'pitch-selected':''}`} onClick={() => setPitch('small')}><div className="pitch-name">ملعب صغير</div><div className="pitch-price">250 ⃁</div><div className="pitch-sub">2 ساعات</div></div>
+            <div className={`pitch-card ${pitch==='big'?'pitch-selected':''}`} onClick={() => setPitch('big')}><div className="pitch-name">ملعب كبير</div><div className="pitch-price">300 ⃁</div><div className="pitch-sub">2 ساعات</div></div>
           </div>
         </div>
         <div className="form-row">
@@ -3015,7 +3073,7 @@ function FieldsCal({ role, toast, refresh, branch }) {
         <div className="form-group">
           <label className="form-label">إضافات</label>
           <div className="water-toggle" onClick={() => setWater(w=>!w)}>
-            <div className="water-toggle-left"><span style={{ fontSize:20 }}>💧</span><div><div style={{ fontSize:13, fontWeight:500, color:'var(--t1)' }}>صندوق مياه</div><div style={{ fontSize:12, color:'var(--t3)' }}>+20 ر · <WaterStock branch={branch}/></div></div></div>
+            <div className="water-toggle-left"><span style={{ fontSize:20 }}>💧</span><div><div style={{ fontSize:13, fontWeight:500, color:'var(--t1)' }}>صندوق مياه</div><div style={{ fontSize:12, color:'var(--t3)' }}>+20 ⃁ · <WaterStock branch={branch}/></div></div></div>
             <div className={`toggle-switch ${water?'toggle-on':''}`}/>
           </div>
         </div>
@@ -3051,8 +3109,8 @@ function FieldsCal({ role, toast, refresh, branch }) {
             const paid = form.payers.reduce((a,p)=>a+Number(p.amount||0),0)+Number(form.deposit||0)
             const rem = total-paid
             return (form.payers.length>0||Number(form.deposit)>0)&&<div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginTop:8,paddingTop:8,borderTop:'1px solid var(--border)'}}>
-              <span style={{color:'var(--t3)'}}>المدفوع: {fmt(paid)} ر من {fmt(total)} ر</span>
-              <span style={{color:rem<=0?'var(--green)':'var(--red)',fontWeight:600}}>{rem<=0?'✅ مكتمل':`متبقي: ${fmt(rem)} ر`}</span>
+              <span style={{color:'var(--t3)'}}>المدفوع: {fmt(paid)} ⃁ من {fmt(total)} ⃁</span>
+              <span style={{color:rem<=0?'var(--green)':'var(--red)',fontWeight:600}}>{rem<=0?'✅ مكتمل':`متبقي: ${fmt(rem)} ⃁`}</span>
             </div>
           })()}
         </div>
