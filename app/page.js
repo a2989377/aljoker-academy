@@ -1,8 +1,8 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
-import { supabase, approveRecord, returnRecord, cancelRecord, correctSubscription, subscriptionFlags, subscriptionFlagItems, markFlagsReviewed, FLAG_LABELS, FLAG_ORDER, addDaysStr, PINS, ROLES, BRANCHES, MONTHS, EXP_CATS, EXP_COLORS, monthEnd, fmt, uploadReceipt, subStatus, daysBetween, PKG3_PRICE, bumpPaid, splitPayment, insertInitialPayments, fetchRevenue } from '../lib/supabase'
+import { supabase, todayStr, approveRecord, returnRecord, cancelRecord, correctSubscription, subscriptionFlags, subscriptionFlagItems, markFlagsReviewed, FLAG_LABELS, FLAG_ORDER, addDaysStr, PINS, ROLES, BRANCHES, MONTHS, EXP_CATS, EXP_COLORS, monthEnd, fmt, uploadReceipt, subStatus, daysBetween, PKG3_PRICE, bumpPaid, splitPayment, insertInitialPayments, fetchRevenue } from '../lib/supabase'
 
-const TODAY = new Date().toISOString().slice(0, 10)
+const TODAY = todayStr()
 const avColors = ['list-av-red','list-av-green','list-av-blue','list-av-yellow']
 
 // ============ DONUT CHART ============
@@ -777,7 +777,7 @@ function LoginPage({ onLogin }) {
 
 // ============ OWNER DASHBOARD ============
 function OwnerDashboard({ toast, refresh, branch }) {
-  const [month, setMonth] = useState('2026-10')
+  const [month, setMonth] = useState(TODAY.slice(0,7))
   const [stats, setStats] = useState({ pitchRev:0, subRev:0, kitRev:0, otherRev:0, exp:0, bookingCount:0, subsCount:0 })
   const [lastStats, setLastStats] = useState({ pitchRev:0, subRev:0, kitRev:0, exp:0 })
   const [pending, setPending] = useState([])
@@ -1296,7 +1296,7 @@ function OwnerFields({ toast, refresh, branch }) {
   const [calYear, setCalYear] = useState(new Date().getFullYear())
   const [calMonth, setCalMonth] = useState(new Date().getMonth())
   const [selectedDate, setSelectedDate] = useState(null)
-  const [month, setMonth] = useState('2026-09')
+  const [month, setMonth] = useState(TODAY.slice(0,7))
 
   useEffect(() => {
     supabase.from('bookings').select('*').eq('branch', branch).eq('status','approved').order('date',{ascending:false}).then(({data}) => setBookings(data||[]))
@@ -1458,7 +1458,7 @@ function BookingSearch({ bookings }) {
 // ============ OWNER EXPENSES ============
 function OwnerExpenses({ toast, refresh, branch }) {
   const [tab, setTab] = useState('monthly')
-  const [month, setMonth] = useState('2026-09')
+  const [month, setMonth] = useState(TODAY.slice(0,7))
   const [expenses, setExpenses] = useState([])
   const [pnlRows, setPnlRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -1471,7 +1471,7 @@ function OwnerExpenses({ toast, refresh, branch }) {
 
   async function loadPnl() {
     setLoading(true)
-    const dataMonths = ['2026-11','2026-10','2026-09','2026-08','2026-07','2026-06']
+    const dataMonths = MONTHS.map(m => m.value).filter(v => v <= TODAY.slice(0,7)).reverse()
     const rows = await Promise.all(dataMonths.map(async m => {
       const start = m+'-01', end = monthEnd(m)
       const [exRes, rev] = await Promise.all([
@@ -1486,7 +1486,7 @@ function OwnerExpenses({ toast, refresh, branch }) {
       const totalRev = pitchRev+subRev+kitRev
       return { month:m, pitchRev, subRev, kitRev, operExp, loanExp, totalRev, net:totalRev-operExp-loanExp, netExLoan:totalRev-operExp }
     }))
-    setPnlRows(rows); setLoading(false)
+    setPnlRows(rows.filter(r => r.totalRev || r.operExp || r.loanExp)); setLoading(false)
   }
 
   useEffect(() => { if(tab==='monthly') load(month); else loadPnl() }, [month, refresh, branch, tab])
@@ -2466,7 +2466,7 @@ function StaffInventory({ toast, refresh, branch }) {
   const [sales, setSales] = useState([])
   const [subsList, setSubsList] = useState([])
   const [kitCount, setKitCount] = useState(0)
-  const [month, setMonth] = useState('2026-10')
+  const [month, setMonth] = useState(TODAY.slice(0,7))
   const [modal, setModal] = useState(false)
   const [group, setGroup] = useState(null)
   const [size, setSize] = useState('')
@@ -2693,7 +2693,7 @@ function StaffInventory({ toast, refresh, branch }) {
 
 // ============ MY EXPENSES ============
 function MyExpenses({ role, toast, refresh, branch }) {
-  const [month, setMonth] = useState('2026-09')
+  const [month, setMonth] = useState(TODAY.slice(0,7))
   const [pending, setPending] = useState([])
   const [returned, setReturned] = useState([])
   const [approved, setApproved] = useState([])
