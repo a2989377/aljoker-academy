@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap');
+
 /* The official Saudi riyal sign (U+20C1). Phone fonts do not all have it yet, so it ships with the app.
    unicode-range keeps this font to that single character; size-adjust matches the height of the digits. */
 @font-face {
@@ -7,8 +9,6 @@
   size-adjust: 80%;
   font-display: swap;
 }
-
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap');
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -279,7 +279,8 @@ html, body {
 .modal {
   background: var(--surface); border-radius: 16px 16px 0 0;
   width: 100%; max-width: 560px; padding: 1.5rem;
-  max-height: 88vh; overflow-y: auto;
+  max-height: 88vh; max-height: min(88vh, calc(100dvh - 2rem));
+  overflow-y: auto; overscroll-behavior: contain;
 }
 .modal-handle { width: 36px; height: 4px; background: var(--border2); border-radius: 2px; margin: 0 auto 1.25rem; }
 .modal-title { font-size: 16px; font-weight: 700; color: var(--t1); margin-bottom: 1.25rem; }
@@ -440,3 +441,13 @@ html, body {
 /* RECEIPT VIEW */
 .receipt-link { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--blue); text-decoration: none; margin-top: 3px; }
 .receipt-link:hover { text-decoration: underline; }
+
+
+/* LARGE SCREENS: a wider column and popups as centered windows. Phones are not affected. */
+@media (min-width: 900px) {
+  .page { max-width: 880px; }
+  .bottom-nav { max-width: 880px; margin: 0 auto; border: 1px solid var(--border); border-bottom: none; border-radius: 14px 14px 0 0; }
+  .fab { right: max(1rem, calc(50% - 440px + 1rem)); }
+  .modal-overlay { align-items: center; padding: 1.5rem; }
+  .modal { border-radius: 16px; max-width: 640px; max-height: min(88vh, calc(100vh - 3rem)); }
+}
