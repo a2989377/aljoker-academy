@@ -417,6 +417,7 @@ function SubscriberDetail({ sub, onClose }) {
   const [periods, setPeriods] = useState([])
   const [sales, setSales] = useState([])
   const [pays, setPays] = useState([])
+  const [edits, setEdits] = useState([])
   const [loading, setLoading] = useState(false)
   useEffect(() => {
     if (!sub) return
@@ -427,12 +428,13 @@ function SubscriberDetail({ sub, onClose }) {
       const { data: per } = await supabase.from('subscribers').select('*').eq('member_id', mid).order('start_date', { ascending: false })
       const rows = (per && per.length) ? per : [sub]
       const ids = rows.map(r => String(r.id))
-      const [sl, py] = await Promise.all([
+      const [sl, py, ed] = await Promise.all([
         supabase.from('sales').select('*').in('subscriber_id', ids).order('created_at', { ascending: false }),
         supabase.from('payments').select('*').eq('record_type', 'subscriber').in('record_id', ids).neq('status', 'rejected').order('paid_at', { ascending: false }),
+        supabase.from('subscriber_edits').select('*').in('subscriber_id', ids).order('edited_at', { ascending: false }),
       ])
       if (!alive) return
-      setPeriods(rows); setSales(sl.data || []); setPays(py.data || []); setLoading(false)
+      setPeriods(rows); setSales(sl.data || []); setPays(py.data || []); setEdits(ed.data || []); setLoading(false)
     }
     load()
     return () => { alive = false }
@@ -468,6 +470,22 @@ function SubscriberDetail({ sub, onClose }) {
               </div>
             ))}
           </div>
+          {edits.length > 0 && (
+            <>
+              <div className="sec">سجل التعديلات</div>
+              <div className="card">
+                {edits.map(e => (
+                  <div key={e.id} className="list-row" style={{ alignItems: 'flex-start' }}>
+                    <div>
+                      <div className="list-name">{{ name: 'الاسم', guardian_phone: 'رقم الجوال', start_date: 'تاريخ البداية', end_date: 'تاريخ الانتهاء' }[e.field] || e.field}</div>
+                      <div className="list-sub">{e.old_value || 'فارغ'} ← <b style={{ color: 'var(--t1)' }}>{e.new_value || 'فارغ'}</b></div>
+                    </div>
+                    <div className="list-right"><span style={{ fontSize: 10, color: 'var(--t3)' }}>{e.edited_by} · {fmtDay(e.edited_at)}</span></div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
           <div className="sec">المشتريات</div>
           <div className="card">
             {sales.length === 0 ? <div className="empty" style={{ padding: '1rem' }}>لا توجد مشتريات</div> : sales.map(s => (
@@ -1292,6 +1310,7 @@ function OwnerAcademy({ toast, refresh, branch }) {
                       <div style={{ minWidth:0 }}>
                         <div className="list-name">{s.name}</div>
                         <div className="list-sub">{s.sub_amount>0?`${fmt(s.sub_amount)} ⃁`:''}{s.type==='family'?` · عائلة ${s.members_count||''} أفراد`:''}{s.has_bus?' · باص':''}{s.has_kit?' · طقم':''}{s.end_date?` · حتى ${s.end_date}`:''}{s.guardian_phone?` · ${s.guardian_phone}`:''}</div>
+                        {Number(s.edit_count) > 0 && <div className="list-sub" style={{ color:'var(--t3)' }}>✎ عُدّل{s.last_edit_at ? ` · ${fmtDay(s.last_edit_at)}` : ''}</div>}
                         {flags.map(x => <div key={x.code} className="list-sub" style={{ color:'var(--orange)' }}>⚠️ {x.text}{x.staffChecked ? <span style={{ color:'var(--green)', fontWeight:600 }}> · ✓ راجعته الإدارة</span> : null}</div>)}
                       </div>
                     </div>
@@ -2113,13 +2132,36 @@ function StaffSubs({ toast, refresh, branch }) {
     setRenewModal(false); setRenewSub(null); load()
   }
 
+  // every change of the name, the phone or the dates is saved with the old value, the new value, who and when.
+  // A change that would put two subscriptions of the same person on the same day is refused.
   async function saveEdit() {
     if (!editSub) return
+    setFormError('')
+    const newName = (editForm.name || '').trim()
+    if (!newName) { setFormError('أدخل الاسم'); return }
+    const phone = (editForm.phone || '').trim() || null
+    const start = editForm.startDate || null, end = editForm.endDate || null
+    const changes = []
+    const add = (field, oldV, newV) => {
+      const o = oldV == null || oldV === '' ? null : String(oldV), n = newV == null || newV === '' ? null : String(newV)
+      if (o !== n) changes.push({ field, old: o, neu: n })
+    }
+    add('name', editSub.name, newName); add('guardian_phone', editSub.guardian_phone, phone)
+    add('start_date', editSub.start_date, start); add('end_date', editSub.end_date, end)
+    if (!changes.length) { setEditModal(false); setEditSub(null); return }
+    if (start && end && end < start) { setFormError('تاريخ الانتهاء قبل تاريخ البداية'); return }
+    if (changes.some(c => c.field !== 'guardian_phone')) {
+      const clash = await overlapFor(newName, start, end, [editSub.id])
+      if (clash) { setFormError(`لا يمكن حفظ هذا التعديل: يتداخل مع اشتراك آخر لنفس الاسم يعمل حتى ${clash.end_date}.`); return }
+    }
     setSubmitting(true)
-    await supabase.from('subscribers').update({
-      name: editForm.name, guardian_phone: editForm.phone||null,
-      start_date: editForm.startDate||null, end_date: editForm.endDate||null,
+    const { error } = await supabase.from('subscribers').update({
+      name: newName, guardian_phone: phone, start_date: start, end_date: end,
+      edit_count: Number(editSub.edit_count || 0) + changes.length, last_edit_at: new Date().toISOString(),
     }).eq('id', editSub.id)
+    if (error) { setSubmitting(false); toast('خطأ في الحفظ', 'error'); console.error(error); return }
+    await supabase.from('subscriber_edits').insert(changes.map(c => ({
+      subscriber_id: String(editSub.id), branch, field: c.field, old_value: c.old, new_value: c.neu, edited_by: createdBy })))
     setSubmitting(false)
     toast('✅ تم التعديل بنجاح','success')
     setEditModal(false); setEditSub(null); load()
@@ -2313,6 +2355,7 @@ function StaffSubs({ toast, refresh, branch }) {
                     <div className="list-name">{s.name}</div>
                     <div className="list-sub">{s.sub_amount>0?`${fmt(s.sub_amount)} ⃁`:''}{s.type==='family'?` · عائلة ${s.members_count||''} أفراد`:''}{s.has_bus?' · باص':''}{s.has_kit?' · طقم':''}{s.guardian_phone?` · 📞 ${s.guardian_phone}`:''}</div>
                     <div className="list-sub">{s.end_date?`حتى ${s.end_date}`:''}</div>
+                    {Number(s.edit_count) > 0 && <div className="list-sub" style={{ color:'var(--t3)' }}>✎ عُدّل{s.last_edit_at ? ` · ${fmtDay(s.last_edit_at)}` : ''}</div>}
                     {flagsOf(s).map(x => <div key={x.code} className="list-sub" style={{ color:'var(--orange)', fontWeight:600 }}>⚠️ {x.text}</div>)}
                     {flagsOf(s).length > 0 && <button onClick={() => reviewRow(s)} style={{ fontSize:10, background:'var(--green-l)', border:'1px solid var(--green)', borderRadius:6, padding:'3px 10px', color:'var(--green)', cursor:'pointer', fontFamily:'inherit', marginTop:4 }}>تمت المراجعة</button>}
                   </div>
@@ -2326,7 +2369,7 @@ function StaffSubs({ toast, refresh, branch }) {
                     <button onClick={() => openRenew(s)} style={btn('var(--green-l)','var(--green)','var(--green)')}>تجديد</button>
                     {!s.is_frozen && <button onClick={() => { setFreezeSub(s); setFreezeDays(7); setFreezeModal(true) }} style={btn('#e0f2fe','#38bdf8','#0369a1')}>تجميد</button>}
                     {s.is_frozen && <button onClick={async () => { await supabase.from('subscribers').update({is_frozen:false}).eq('id',s.id); toast('✅ تم إلغاء التجميد','success'); load() }} style={btn('#e0f2fe','#38bdf8','#0369a1')}>إلغاء تجميد ❄️</button>}
-                    <button onClick={() => { setEditSub(s); setEditForm({ name:s.name, phone:s.guardian_phone||'', startDate:s.start_date||'', endDate:s.end_date||'' }); setEditModal(true) }} style={btn('var(--surface2)','var(--border)','var(--t2)')}>تعديل</button>
+                    <button onClick={() => { setFormError(''); setEditSub(s); setEditForm({ name:s.name, phone:s.guardian_phone||'', startDate:s.start_date||'', endDate:s.end_date||'' }); setEditModal(true) }} style={btn('var(--surface2)','var(--border)','var(--t2)')}>تعديل</button>
                   </div>
                 </div>
               </div>
@@ -2371,6 +2414,7 @@ function StaffSubs({ toast, refresh, branch }) {
           <input className="form-input" readOnly value={fmt(editSub?.total_amount||0)+' ⃁'} style={{ color:'var(--t3)', background:'var(--surface2)' }}/>
           <div className="list-sub" style={{ marginTop:4 }}>المبلغ لا يُعدَّل بعد الاعتماد. إن كان فيه خطأ يصححه المالك، وللمبلغ المتبقي استخدم تسجيل دفعة.</div>
         </div>
+        {errBox}
         <button className="btn-primary" disabled={submitting} onClick={saveEdit}>{submitting?'جاري الحفظ...':'حفظ التعديلات'}</button>
         <button className="btn-secondary" onClick={() => setEditModal(false)}>إلغاء</button>
       </Modal>
