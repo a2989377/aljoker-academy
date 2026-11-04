@@ -322,7 +322,7 @@ function groupInventory(items) {
   })
 }
 
-function InventoryGrid({ items, onSale }) {
+function InventoryGrid({ items, onSale, showSold }) {
   const groups = groupInventory(items)
   return (
     <>
@@ -332,7 +332,7 @@ function InventoryGrid({ items, onSale }) {
             <div style={{ fontSize: 28 }}>{g.icon || '📦'}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="list-name">{g.name}</div>
-              <div className="list-sub">{g.price} ⃁ · <span style={{ color: g.stock <= 0 ? 'var(--red)' : 'var(--green)', fontWeight: 600 }}>متبقي {g.stock} {invUnit(g.name)}</span> · مباع {g.sold}</div>
+              <div className="list-sub">{g.price} ⃁ · <span style={{ color: g.stock <= 0 ? 'var(--red)' : 'var(--green)', fontWeight: 600 }}>متبقي {g.stock} {invUnit(g.name)}</span>{showSold ? ` · مباع في الشهر ${g.sold}` : ''}</div>
             {g.derived && <div className="list-sub" style={{ marginTop: 2 }}>حقيبة {g.bagStock} · جوارب {g.socksStock} زوج · يتاح منها {g.stock} باقة</div>}
             </div>
             {onSale && <button onClick={() => onSale(g)} style={{ fontSize: 11, background: 'var(--green-l)', border: '1px solid var(--green)', borderRadius: 6, padding: '5px 12px', color: 'var(--green)', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>تسجيل بيع</button>}
@@ -527,7 +527,8 @@ function describeRecord(type, r) {
   }
   if (type === 'closing') return {
     _label: 'إقفال يوم', _amount: r.due, _paid: r.entered, _desc: `إقفال ${r.day}`, _by: r.created_by,
-    _meta: `${(r.bookings || []).length} حجوزات`, _note: (r.bookings || []).map(b => b.name).join(' · '),
+    _meta: `${(r.bookings || []).length} حجوزات${Number(r.expected_network) > 0 || Number(r.expected_transfer) > 0 ? ` · المسجّل عند الحجز: شبكة ${fmt(r.expected_network || 0)} ⃁ · تحويل ${fmt(r.expected_transfer || 0)} ⃁` : ''}`,
+    _note: (r.bookings || []).map(b => b.name).join(' · '),
   }
   if (type === 'expense') return {
     _label: 'مصروف', _amount: r.amount, _desc: r.description, _by: r.submitted_by, _meta: `${r.category} · ${r.date}`,
@@ -892,7 +893,11 @@ function OwnerDashboard({ toast, refresh, branch }) {
     ])
     const payMap = {}
     ;(pPay.data||[]).filter(p => p.kind==='initial').forEach(p => { const k = p.record_type+':'+p.record_id; (payMap[k] = payMap[k] || []).push(p) })
-    const card = (type, r) => ({ ...r, _type:type, ...describeRecord(type, r), _pays: payMap[(type==='closing'?'day':type)+':'+r.id] || [], _flags: type==='subscriber' ? subscriptionFlags(r, subs) : [] })
+    const card = (type, r) => ({ ...r, _type:type, ...describeRecord(type, r), _pays: payMap[(type==='closing'?'day':type)+':'+r.id] || [], _flags: type==='subscriber' ? subscriptionFlags(r, subs)
+      : type==='closing' ? [
+          ...(Number(r.network || 0) !== Number(r.expected_network || 0) ? [`الشبكة: المحصّل ${fmt(r.network || 0)} ⃁ والمسجّل عند الحجز ${fmt(r.expected_network || 0)} ⃁`] : []),
+          ...(Number(r.transfer || 0) !== Number(r.expected_transfer || 0) ? [`التحويل: المحصّل ${fmt(r.transfer || 0)} ⃁ والمسجّل عند الحجز ${fmt(r.expected_transfer || 0)} ⃁`] : []),
+        ] : [] })
     const allPending = [
       ...(pSub.data||[]).map(r => card('subscriber', r)),
       ...(pBk.data||[]).map(r => card('booking', r)),
@@ -1214,6 +1219,8 @@ function OwnerAcademy({ toast, refresh, branch }) {
   const [detailSub, setDetailSub] = useState(null)
   const [corrRec, setCorrRec] = useState(null)
   const [cancelRec, setCancelRec] = useState(null)
+  const [monthSub, setMonthSub] = useState(0)
+  const [monthBus, setMonthBus] = useState(0)
 
   async function load() {
     const [s, inv] = await Promise.all([
@@ -1223,6 +1230,7 @@ function OwnerAcademy({ toast, refresh, branch }) {
     setSubs((s.data||[]).sort(newestFirst)); setInventory(inv.data||[]); setLoading(false)
   }
   useEffect(() => { load() }, [refresh, branch])
+  useEffect(() => { fetchRevenue(branch, TODAY.slice(0,7)).then(r => { setMonthSub(r.sub); setMonthBus(r.bus) }) }, [refresh, branch])
 
   const expiringSoon = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d!==null && d>=0 && d<=14 })
   const expired = subs.filter(s => { const d = daysBetween(TODAY, s.end_date); return d!==null && d<0 })
@@ -1233,12 +1241,10 @@ function OwnerAcademy({ toast, refresh, branch }) {
   if (filter==='kit') filtered = filtered.filter(s => s.has_kit)
   if (filter==='unpaid') filtered = filtered.filter(s => Number(s.balance)>0)
 
-  const totalSubRev = subs.reduce((a,s) => a+Number(s.sub_amount||0), 0)
   const owedTotal = subs.reduce((a,s) => a+Number(s.balance||0), 0)
   const busCount = subs.filter(s => s.has_bus).length
   const kitCount = subs.filter(s => s.has_kit).length
   const kitRev = subs.reduce((a,s) => a+Number(s.kit_amount||0), 0)
-  const busRev = subs.reduce((a,s) => a+Number(s.bus_amount||0), 0)
   const tiny = { fontSize:9, borderRadius:5, padding:'2px 6px', cursor:'pointer', fontFamily:'inherit' }
 
   async function doCancel(reason) {
@@ -1257,7 +1263,7 @@ function OwnerAcademy({ toast, refresh, branch }) {
         <>
           <div className="kpi-grid">
             <div className="kpi"><div className="kpi-label">إجمالي المشتركين</div><div className="kpi-val">{subs.length}</div><div className="kpi-sub">نشط: {subs.length-expired.length}</div></div>
-            <div className="kpi"><div className="kpi-label">قيمة الاشتراكات الحالية</div><div className="kpi-val kpi-val-g">{fmt(totalSubRev)} ⃁</div></div>
+            <div className="kpi"><div className="kpi-label">إيراد الاشتراكات · {MONTHS.find(m => m.value === TODAY.slice(0,7))?.label.split(' ')[0]}</div><div className="kpi-val kpi-val-g">{fmt(monthSub)} ⃁</div></div>
             {owedTotal>0 && <div className="kpi"><div className="kpi-label">مبالغ مستحقة</div><div className="kpi-val kpi-val-r">{fmt(owedTotal)} ⃁</div></div>}
             {expiringSoon.length>0 && <div className="kpi kpi-full" style={{ borderColor:'var(--orange)', background:'var(--orange-l)' }}><div className="kpi-label" style={{ color:'var(--orange)' }}>ينتهي قريباً</div><div className="kpi-val" style={{ color:'var(--orange)' }}>{expiringSoon.length} مشترك</div><div className="kpi-sub" style={{ color:'var(--orange)' }}>خلال 14 يوماً</div></div>}
           </div>
@@ -1308,7 +1314,7 @@ function OwnerAcademy({ toast, refresh, branch }) {
         <>
           <div className="kpi-grid">
             <div className="kpi"><div className="kpi-label">مستخدمو الباص</div><div className="kpi-val">{busCount}</div><div className="kpi-sub">من {subs.length} مشترك</div></div>
-            <div className="kpi"><div className="kpi-label">رسوم الباص للمشتركين الحاليين</div><div className="kpi-val">{fmt(busRev)} ⃁</div><div className="kpi-sub" style={{ color:'var(--orange)', fontSize:10 }}>يُحوَّل لأصحاب الباص</div></div>
+            <div className="kpi"><div className="kpi-label">رسوم الباص المحصّلة · {MONTHS.find(m => m.value === TODAY.slice(0,7))?.label.split(' ')[0]}</div><div className="kpi-val">{fmt(monthBus)} ⃁</div><div className="kpi-sub" style={{ color:'var(--orange)', fontSize:10 }}>يُحوَّل لأصحاب الباص</div></div>
             <div className="kpi"><div className="kpi-label">اشتروا طقم</div><div className="kpi-val">{kitCount} مشترك</div></div>
             <div className="kpi"><div className="kpi-label">إيراد الطقم</div><div className="kpi-val kpi-val-g">{fmt(kitRev)} ⃁</div></div>
           </div>
@@ -1840,7 +1846,14 @@ function SubPricingForm({ f, setF, BUS_PRICES, inventory }) {
             {remaining === 0 ? '✅ مكتمل' : remaining < 0 ? `المدفوع أكبر بـ ${fmt(-remaining)} ⃁` : `متبقي: ${fmt(remaining)} ⃁`}
           </span>
         </div>
-        {remaining > 0 && <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4 }}>المتبقي يُسجَّل مستحقاً ويمكن تسجيل دفعة عليه لاحقاً.</div>}
+        {/* the subscriber cannot pay the full price: what he paid becomes the final price, nothing is owed */}
+        {remaining > 0 && totalPaid > 0 && totalPaid >= t.kitFinal + t.busFinal && (
+          <button type="button" onClick={() => setF(ff => ({ ...ff, subOverride: String(totalPaid - t.kitFinal - t.busFinal) }))}
+            style={{ width: '100%', marginTop: 8, padding: '.5rem', fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', background: 'var(--green-l)', color: 'var(--green)', border: '1.5px solid var(--green)', borderRadius: 8, fontWeight: 600 }}>
+            اعتبر هذا المبلغ هو السعر النهائي
+          </button>
+        )}
+        {remaining > 0 && <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4 }}>أو اتركه مستحقاً ويمكن تسجيل دفعة عليه لاحقاً.</div>}
       </div>
     </>
   )
@@ -1879,6 +1892,8 @@ function StaffSubs({ toast, refresh, branch }) {
   const [addingBreak, setAddingBreak] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState('')
+  const [month, setMonth] = useState(TODAY.slice(0,7))
+  const [monthSub, setMonthSub] = useState(0)
   const errBox = formError ? <div style={{ background:'var(--red-l)', border:'1px solid var(--red-m)', color:'var(--red)', borderRadius:8, padding:'.5rem .75rem', fontSize:12, fontWeight:600, marginBottom:'.75rem' }}>{formError}</div> : null
 
   async function load() {
@@ -1892,6 +1907,8 @@ function StaffSubs({ toast, refresh, branch }) {
     setSubs((s.data||[]).filter(x=>x.is_current!==false).sort(newestFirst)); setBreaks(br.data||[]); setInventory(inv.data||[]); setLoading(false)
   }
   useEffect(() => { load() }, [refresh, branch])
+  // the same figure the owner sees under الاشتراكات: money received in the month and approved
+  useEffect(() => { fetchRevenue(branch, month).then(r => setMonthSub(r.sub)) }, [month, refresh, branch])
 
   const approvedSubs = subs.filter(s => s.status==='approved')
   const pendingSubs = subs.filter(s => s.status==='pending')
@@ -2103,7 +2120,6 @@ function StaffSubs({ toast, refresh, branch }) {
   if (filter==='bus') filtered = filtered.filter(s => s.has_bus)
   if (filter==='kit') filtered = filtered.filter(s => s.has_kit)
 
-  const totalRev = approvedSubs.reduce((a,s) => a+Number(s.sub_amount||0), 0)
   const owedTotal = approvedSubs.reduce((a,s) => a+Number(s.balance||0), 0)
   if (filter==='unpaid') filtered = filtered.filter(s => Number(s.balance)>0)
   const btn = (bg, bd, c) => ({ fontSize:9, background:bg, border:`1px solid ${bd}`, borderRadius:5, padding:'2px 6px', color:c, cursor:'pointer', fontFamily:'inherit' })
@@ -2112,7 +2128,13 @@ function StaffSubs({ toast, refresh, branch }) {
     <div className="page">
       <div className="summary-strip">
         <div className="strip-item"><div className="strip-label">المشتركون</div><div className="strip-val">{approvedSubs.length}</div></div>
-        <div className="strip-item"><div className="strip-label">قيمة الاشتراكات الحالية</div><div className="strip-val" style={{ color:'var(--green)' }}>{fmt(totalRev)} ⃁</div></div>
+        <div className="strip-item">
+          <div className="strip-label">إيراد الاشتراكات</div>
+          <div className="strip-val" style={{ color:'var(--green)' }}>{fmt(monthSub)} ⃁</div>
+          <select value={month} onChange={e => setMonth(e.target.value)} style={{ border:'none', background:'transparent', fontSize:10, color:'var(--t3)', fontFamily:'inherit', maxWidth:'100%', marginTop:2 }}>
+            {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+          </select>
+        </div>
         {owedTotal>0 && <div className="strip-item"><div className="strip-label">مستحقات</div><div className="strip-val" style={{ color:'var(--red)' }}>{fmt(owedTotal)} ⃁</div></div>}
         {pendingSubs.length>0 && <div className="strip-item"><div className="strip-label">معلق</div><div className="strip-val" style={{ color:'var(--orange)' }}>{pendingSubs.length}</div></div>}
         {returnedSubs.length>0 && <div className="strip-item"><div className="strip-label">أُعيد</div><div className="strip-val" style={{ color:'var(--orange)' }}>{returnedSubs.length}</div></div>}
@@ -2358,6 +2380,8 @@ function StaffBus({ refresh, branch, toast }) {
   const [allSubs, setAllSubs] = useState([])
   const [busSearch, setBusSearch] = useState('')
   const [listSearch, setListSearch] = useState('')
+  const [month, setMonth] = useState(TODAY.slice(0,7))
+  const [busMonth, setBusMonth] = useState(0)
   const [selectedForBus, setSelectedForBus] = useState(null)
   const [addBusForm, setAddBusForm] = useState(emptyBus)
   const BUS_PRICES = [150,200,250,300,350,400,450,500,550,600,650,700,750]
@@ -2373,6 +2397,8 @@ function StaffBus({ refresh, branch, toast }) {
     setSubs((bus.data||[]).sort(busNewest)); setAllSubs((all.data||[]).sort(newestFirst))
   }
   useEffect(() => { load() }, [refresh, branch])
+  // bus fees received in the month and approved (they are passed on to the bus owners)
+  useEffect(() => { fetchRevenue(branch, month).then(r => setBusMonth(r.bus)) }, [month, refresh, branch])
 
   // the bus amount is passed through to the bus owners: it is a payment on the subscriber, but not academy revenue
   async function busPayment(rec, amount, form) {
@@ -2429,25 +2455,29 @@ function StaffBus({ refresh, branch, toast }) {
     setExtModal(false); setExtForm(emptyBus); load()
   }
 
-  const busRev = subs.reduce((a,s) => a+Number(s.bus_amount||0), 0)
 
   const q = listSearch.trim()
   const shownSubs = q ? subs.filter(s => (s.name || '').includes(q) || (s.guardian_phone || '').includes(q)) : subs
 
   return (
     <div className="page">
+      <div className="month-bar">
+        <select className="month-select" value={month} onChange={e => setMonth(e.target.value)}>
+          {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+        </select>
+      </div>
       <div className="kpi-grid">
-        <div className="kpi kpi-accent kpi-full">
+        <div className="kpi">
           <div className="kpi-label">مستخدمو الباص</div>
           <div className="kpi-val">{subs.length} مشترك</div>
         </div>
         <div className="kpi">
-          <div className="kpi-label">رسوم الباص للمشتركين الحاليين</div>
-          <div className="kpi-val">{fmt(busRev)} ⃁</div>
+          <div className="kpi-label">رسوم الباص المحصّلة · {MONTHS.find(m => m.value === month)?.label.split(' ')[0]}</div>
+          <div className="kpi-val">{fmt(busMonth)} ⃁</div>
         </div>
       </div>
       <div style={{ background:'var(--orange-l)', border:'1px solid #fbbf24', borderRadius:8, padding:'.6rem .875rem', fontSize:12, color:'var(--orange)', marginBottom:'.75rem' }}>
-        ⚠️ إيراد الباص ({fmt(busRev)} ⃁) يُحوَّل لأصحاب الباص ولا يدخل في حسابات الأكاديمية
+        ⚠️ رسوم الباص تُحوَّل لأصحاب الباص ولا تدخل في حسابات الأكاديمية
       </div>
       <div className="sec">قائمة الباص ({q ? `${shownSubs.length} من ${subs.length}` : subs.length} مشترك)</div>
       <div className="search-wrap" style={{ borderRadius:'var(--r) var(--r) 0 0', border:'1px solid var(--border)' }}>
@@ -2578,7 +2608,8 @@ function StaffInventory({ toast, refresh, branch }) {
   const [inventory, setInventory] = useState([])
   const [sales, setSales] = useState([])
   const [subsList, setSubsList] = useState([])
-  const [kitCount, setKitCount] = useState(0)
+  const [monthKits, setMonthKits] = useState([])
+  const [monthWater, setMonthWater] = useState(0)
   const [month, setMonth] = useState(TODAY.slice(0,7))
   const [modal, setModal] = useState(false)
   const [group, setGroup] = useState(null)
@@ -2593,23 +2624,36 @@ function StaffInventory({ toast, refresh, branch }) {
   const createdBy = ROLES[branch==='jazan'?'admin_jazan':'admin_riyadh']?.label
 
   async function load() {
-    const [inv, s, subs, kits] = await Promise.all([
+    const start = month+'-01', end = monthEnd(month)
+    const [inv, s, subs, kits, water] = await Promise.all([
       supabase.from('inventory').select('*').order('name'),
-      supabase.from('sales').select('*').eq('branch', branch).in('status',['approved','pending','returned']).order('created_at',{ascending:false}).limit(60),
+      supabase.from('sales').select('*').eq('branch', branch).in('status',['approved','pending','returned']).order('created_at',{ascending:false}).limit(500),
       supabase.from('subscribers').select('id,name,guardian_phone,start_date,created_at').eq('branch', branch).eq('status','approved').eq('is_current', true),
-      supabase.from('subscribers').select('id',{count:'exact',head:true}).eq('branch', branch).eq('status','approved').eq('has_kit', true),
+      // kits handed out with subscriptions entered in the month
+      supabase.from('subscribers').select('kit_item,kit_qty').eq('branch', branch).in('status',['approved','pending']).eq('has_kit', true).gte('created_at', start+'T00:00:00').lte('created_at', end+'T23:59:59'),
+      // water boxes taken with the pitch bookings of the month
+      supabase.from('bookings').select('id',{count:'exact',head:true}).eq('branch', branch).eq('water', true).in('status',['approved','pending']).gte('date', start).lte('date', end),
     ])
-    setInventory(inv.data||[]); setSales(s.data||[]); setSubsList((subs.data||[]).sort(newestFirst)); setKitCount(kits.count||0)
+    setInventory(inv.data||[]); setSales(s.data||[]); setSubsList((subs.data||[]).sort(newestFirst)); setMonthKits(kits.data||[]); setMonthWater(water.count||0)
   }
-  useEffect(() => { load() }, [refresh, branch])
+  useEffect(() => { load() }, [refresh, branch, month])
 
   const groups = groupInventory(inventory)
-  const visibleSales = sales.filter(s => s.status==='approved' || s.status==='pending')
+  const monthLive = sales.filter(s => (s.status==='approved' || s.status==='pending') && s.created_at?.startsWith(month))
+  const visibleSales = monthLive
   const returnedSales = sales.filter(s => s.status==='returned' && s.created_by===createdBy)
   const pendingSales = sales.filter(s => s.status==='pending')
   const monthSales = sales.filter(s => s.status==='approved' && s.created_at?.startsWith(month))
   const monthCollected = monthSales.reduce((a,s) => a+Number(s.paid_amount||0), 0)
-  const monthUnits = monthSales.filter(s => s.item !== 'مياه').reduce((a,s) => a+Number(s.qty||1), 0) + kitCount
+  // pieces sold in the month, item by item: store sales + kits given with subscriptions + water boxes with bookings.
+  // The top number is the sum of the numbers on the cards, so they always agree.
+  const soldMap = {}
+  monthLive.forEach(s => { soldMap[s.item] = (soldMap[s.item] || 0) + Number(s.qty || 1) })
+  monthKits.forEach(k => { soldMap[k.kit_item] = (soldMap[k.kit_item] || 0) + Number(k.kit_qty || 1) })
+  soldMap['مياه'] = (soldMap['مياه'] || 0) + monthWater
+  const seenName = {}
+  const gridItems = inventory.map(r => { if (seenName[r.name]) return { ...r, sold: 0 }; seenName[r.name] = true; return { ...r, sold: soldMap[r.name] || 0 } })
+  const monthUnits = groupInventory(gridItems).reduce((a, g) => a + Number(g.sold || 0), 0)
 
   function openSale(g) {
     setResendSale(null); setGroup(g); setSize(''); setChosenSub(null); setSubSearch(''); setForm(blankSale); setModal(true)
@@ -2692,8 +2736,8 @@ function StaffInventory({ toast, refresh, branch }) {
         </select>
       </div>
       <div className="kpi-grid">
-        <div className="kpi"><div className="kpi-label">المحصّل من المبيعات</div><div className="kpi-val kpi-val-g">{fmt(monthCollected)} ⃁</div></div>
-        <div className="kpi"><div className="kpi-label">قطع مباعة</div><div className="kpi-val">{monthUnits} قطعة</div></div>
+        <div className="kpi"><div className="kpi-label">المحصّل من المبيعات · {MONTHS.find(m => m.value === month)?.label.split(' ')[0]}</div><div className="kpi-val kpi-val-g">{fmt(monthCollected)} ⃁</div></div>
+        <div className="kpi"><div className="kpi-label">قطع مباعة · {MONTHS.find(m => m.value === month)?.label.split(' ')[0]}</div><div className="kpi-val">{monthUnits} قطعة</div></div>
       </div>
 
       <ReturnedSection count={returnedSales.length}>
@@ -2708,11 +2752,11 @@ function StaffInventory({ toast, refresh, branch }) {
         <div className="info-box info-yellow">{pendingSales.length} مبيعات بانتظار موافقة المالك</div>
       )}
 
-      <InventoryGrid items={inventory} onSale={openSale} />
+      <InventoryGrid items={gridItems} onSale={openSale} showSold />
 
-      <div className="sec">سجل المبيعات</div>
+      <div className="sec">سجل المبيعات · {MONTHS.find(m => m.value === month)?.label}</div>
       <div className="card">
-        {visibleSales.length===0 ? <div className="empty"><div className="empty-icon">🛍️</div>لا يوجد مبيعات</div> :
+        {visibleSales.length===0 ? <div className="empty"><div className="empty-icon">🛍️</div>لا يوجد مبيعات في هذا الشهر</div> :
           visibleSales.map(s => (
             <div key={s.id} className="list-row">
               <div className="list-left">
@@ -2963,7 +3007,7 @@ function FieldsCal({ role, toast, refresh, branch }) {
   const [pitch, setPitch] = useState('small')
   const [water, setWater] = useState(false)
   const label = ROLES[role]?.label
-  const blankBooking = { name:'', phone:'', date:TODAY, time:'', deposit:'', depositMethod:'نقدي' }
+  const blankBooking = { name:'', phone:'', date:TODAY, time:'', depCash:'', depNet:'', depTr:'' }
   const [form, setForm] = useState(blankBooking)
   const [resendBk, setResendBk] = useState(null)      // a returned booking being fixed
   const [formError, setFormError] = useState('')
@@ -2996,10 +3040,12 @@ function FieldsCal({ role, toast, refresh, branch }) {
   async function submit() {
     setFormError('')
     if (!form.name.trim()) { setFormError('أدخل اسم الحاجز'); return }
-    const dep = Number(form.deposit || 0)
+    // only the cash is received now. Network and transfer are noted, and checked in the end of day closing.
+    const depCash = Number(form.depCash || 0), depNet = Number(form.depNet || 0), depTr = Number(form.depTr || 0)
+    const dep = depCash
     const base = pitch==='small'?250:300
     const amount = base+(water?20:0)
-    if (dep > amount) { setFormError('العربون أكبر من قيمة الحجز'); return }
+    if (depCash + depNet + depTr > amount) { setFormError('المبلغ المدخل أكبر من قيمة الحجز'); return }
 
     // Conflict check
     if (form.date && form.time) {
@@ -3020,25 +3066,27 @@ function FieldsCal({ role, toast, refresh, branch }) {
     const fields = {
       pitch, booker_name: form.name.trim(), booker_phone: form.phone || null,
       date: form.date, time: form.time, water, amount,
-      payment_method: dep > 0 ? form.depositMethod : 'غير مدفوع', has_receipt: false, receipt_url: null,
-      deposit: dep, deposit_method: form.depositMethod, collected: dep, balance: amount - dep,
+      payment_method: dep > 0 ? 'نقدي' : 'غير مدفوع', has_receipt: false, receipt_url: null,
+      deposit: dep, deposit_method: 'نقدي', collected: dep, balance: amount - dep,
+      claimed_network: depNet, claimed_transfer: depTr,
       payment_splits: [], payment_status: dep >= amount ? 'مكتمل' : dep > 0 ? 'جزئي' : 'غير مدفوع',
       created_by: label, branch, status: 'approved'
     }
-    const depositRow = id => ({ branch, record_type: 'booking', record_id: String(id), amount: dep, method: form.depositMethod, paid_at: TODAY,
-      status: 'pending', kind: 'later', note: 'عربون', label: form.name.trim(), created_by: label })
+    const depositRows = id => depCash > 0 ? [{
+      branch, record_type: 'booking', record_id: String(id), amount: depCash, method: 'نقدي', paid_at: TODAY,
+      status: 'pending', kind: 'later', note: 'عربون', label: form.name.trim(), created_by: label }] : []
     if (resendBk) {
       const { error } = await supabase.from('bookings').update({ ...fields, return_reason: null, returned_at: null }).eq('id', resendBk.id)
       if (error) { setSubmitting(false); toast('خطأ في الحفظ', 'error'); console.error(error); return }
       await supabase.from('payments').delete().eq('record_type', 'booking').eq('record_id', String(resendBk.id)).eq('status', 'pending')
       // the water box went back to the stock when it was returned; it goes out again now
       if (water) await supabase.rpc('adjust_inventory', { p_name: 'مياه', p_size: '', p_qty: -1 })
-      if (dep > 0) await supabase.from('payments').insert(depositRow(resendBk.id))
+      if (dep > 0) await supabase.from('payments').insert(depositRows(resendBk.id))
       toast('✅ تم الحفظ بنجاح', 'success')
     } else {
       const { data, error } = await supabase.from('bookings').insert(fields).select().single()
       if (error) { setSubmitting(false); toast('خطأ في الحفظ', 'error'); console.error(error); return }
-      if (dep > 0) await supabase.from('payments').insert(depositRow(data.id))
+      if (dep > 0) await supabase.from('payments').insert(depositRows(data.id))
       toast('✅ تم الحفظ بنجاح', 'success')
     }
     setSubmitting(false)
@@ -3049,9 +3097,11 @@ function FieldsCal({ role, toast, refresh, branch }) {
   // a legacy returned booking: open the same form, already filled in
   async function openResendBk(b) {
     setFormError('')
+    const { data: pays } = await supabase.from('payments').select('method,amount').eq('record_type', 'booking').eq('record_id', String(b.id)).eq('status', 'pending')
+    const sum = m => (pays || []).filter(p => p.method === m).reduce((a, p) => a + Number(p.amount), 0)
     setResendBk(b); setPitch(b.pitch || 'small'); setWater(!!b.water)
     setForm({ name: b.booker_name || '', phone: b.booker_phone || '', date: b.date, time: b.time || '',
-      deposit: Number(b.deposit) > 0 ? String(b.deposit) : '', depositMethod: b.deposit_method || 'نقدي' })
+      depCash: sum('نقدي') ? String(sum('نقدي')) : '', depNet: sum('شبكة') ? String(sum('شبكة')) : '', depTr: sum('تحويل') ? String(sum('تحويل')) : '' })
     setModal(true)
   }
   function openNewBooking() { setFormError(''); setResendBk(null); setForm(blankBooking); setPitch('small'); setWater(false); setModal(true) }
@@ -3068,13 +3118,20 @@ function FieldsCal({ role, toast, refresh, branch }) {
     const ids = resend ? (resend.bookings || []).map(x => x.id) : null
     const list = bookings.filter(b => b.date === day && ['approved','pending'].includes(b.status) && Number(b.balance) > 0)
     const ticks = {}; list.forEach(b => { ticks[b.id] = ids ? ids.includes(b.id) : true })
-    setClosing({ day, ticks, cash: resend ? String(resend.cash || '') : '', network: resend ? String(resend.network || '') : '', transfer: resend ? String(resend.transfer || '') : '', proofUrl: resend?.proof_url || '', resend: resend || null })
+    setClosing({ day, ticks, auto: !resend, cash: resend ? String(resend.cash || '') : '', network: resend ? String(resend.network || '') : '', transfer: resend ? String(resend.transfer || '') : '', proofUrl: resend?.proof_url || '', resend: resend || null })
   }
   const closingBks = closing ? bookings.filter(b => b.date === closing.day && ['approved','pending'].includes(b.status) && Number(b.balance) > 0) : []
   const tickedBks = closingBks.filter(b => closing?.ticks[b.id])
   const closeDue = tickedBks.reduce((a, b) => a + Number(b.balance), 0)
-  const closeCash = Number(closing?.cash || 0), closeNet = Number(closing?.network || 0), closeTr = Number(closing?.transfer || 0)
+  // what was noted at booking, for the ticked bookings: network and transfer are expected, the rest of the balance is cash
+  const claimNet = tickedBks.reduce((a, b) => a + Number(b.claimed_network || 0), 0)
+  const claimTr = tickedBks.reduce((a, b) => a + Number(b.claimed_transfer || 0), 0)
+  const autoVals = { cash: Math.max(0, closeDue - claimNet - claimTr), network: claimNet, transfer: claimTr }
+  const shown = k => closing?.auto ? autoVals[k] : Number(closing?.[k] || 0)
+  const closeCash = shown('cash'), closeNet = shown('network'), closeTr = shown('transfer')
   const closeEntered = closeCash + closeNet + closeTr
+  // typing in any box takes over from the automatic amounts
+  const typeAmount = (k, v) => setClosing(c => c.auto ? { ...c, auto: false, cash: String(autoVals.cash || ''), network: String(autoVals.network || ''), transfer: String(autoVals.transfer || ''), [k]: v } : { ...c, [k]: v })
   const closeDiff = closeEntered - closeDue
 
   async function submitClosing() {
@@ -3085,7 +3142,7 @@ function FieldsCal({ role, toast, refresh, branch }) {
     setSubmitting(true)
     const list = tickedBks.map(b => ({ id: b.id, name: b.booker_name, applied: Number(b.balance) }))
     const row = { branch, day: closing.day, bookings: list, due: closeDue, cash: closeCash, network: closeNet, transfer: closeTr,
-      entered: closeEntered, difference: closeDiff, proof_url: closing.proofUrl || null, status: 'pending', created_by: label,
+      entered: closeEntered, difference: closeDiff, expected_network: claimNet, expected_transfer: claimTr, proof_url: closing.proofUrl || null, status: 'pending', created_by: label,
       return_reason: null, returned_at: null }
     const id = closing.resend ? closing.resend.id : crypto.randomUUID()
     const { error } = closing.resend
@@ -3208,7 +3265,7 @@ function FieldsCal({ role, toast, refresh, branch }) {
                   <div className={`list-av ${b.pitch==='small'?'list-av-blue':'list-av-red'}`}>{b.pitch==='small'?'ص':'ك'}</div>
                   <div>
                     <div className="list-name">{b.booker_name}{b.booker_phone?` · 📞 ${b.booker_phone}`:''}</div>
-                    <div className="list-sub">{b.pitch==='small'?'ملعب صغير':'ملعب كبير'} · {b.time}{b.water?' · 💧':''}{Number(b.deposit)>0?` · عربون ${fmt(b.deposit)} ⃁`:''}</div>
+                    <div className="list-sub">{b.pitch==='small'?'ملعب صغير':'ملعب كبير'} · {b.time}{b.water?' · 💧':''}{Number(b.collected)>0?` · استلم نقداً ${fmt(b.collected)} ⃁`:''}{Number(b.claimed_network)>0?` · شبكة ${fmt(b.claimed_network)} ⃁`:''}{Number(b.claimed_transfer)>0?` · تحويل ${fmt(b.claimed_transfer)} ⃁`:''}</div>
                     {b.receipt_url && <a href={b.receipt_url} target="_blank" rel="noreferrer" className="receipt-link">📎 إيصال</a>}
                   </div>
                 </div>
@@ -3251,14 +3308,15 @@ function FieldsCal({ role, toast, refresh, branch }) {
             <div className={`toggle-switch ${water?'toggle-on':''}`}/>
           </div>
         </div>
-        {/* DEPOSIT: the only payment taken with the booking */}
+        {/* WHAT WAS RECEIVED WITH THE BOOKING: an amount for each method */}
         <div style={{background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:8,padding:'.75rem',marginBottom:'.75rem'}}>
-          <div style={{fontSize:12,fontWeight:600,color:'var(--t1)',marginBottom:8}}>عربون (اختياري)</div>
-          <div className="form-row" style={{marginBottom:0}}>
-            <div className="form-group" style={{marginBottom:0}}><label className="form-label">المبلغ</label><input className="form-input" type="number" min="0" value={form.deposit} placeholder="0" onChange={e => setForm(f=>({...f,deposit:e.target.value}))}/></div>
-            <div className="form-group" style={{marginBottom:0}}><label className="form-label">الطريقة</label><PaymentBtns value={form.depositMethod} onChange={v => setForm(f=>({...f,depositMethod:v}))}/></div>
+          <div style={{fontSize:12,fontWeight:600,color:'var(--t1)',marginBottom:8}}>ما استلمته عند الحجز (اختياري)</div>
+          <div className="form-row" style={{marginBottom:0, gridTemplateColumns:'repeat(3, 1fr)'}}>
+            <div className="form-group" style={{marginBottom:0}}><label className="form-label">💵 نقدي</label><input className="form-input" type="number" min="0" value={form.depCash} placeholder="0" onChange={e => setForm(f=>({...f,depCash:e.target.value}))}/></div>
+            <div className="form-group" style={{marginBottom:0}}><label className="form-label">💳 شبكة</label><input className="form-input" type="number" min="0" value={form.depNet} placeholder="0" onChange={e => setForm(f=>({...f,depNet:e.target.value}))}/></div>
+            <div className="form-group" style={{marginBottom:0}}><label className="form-label">📱 تحويل</label><input className="form-input" type="number" min="0" value={form.depTr} placeholder="0" onChange={e => setForm(f=>({...f,depTr:e.target.value}))}/></div>
           </div>
-          <div style={{fontSize:10,color:'var(--t3)',marginTop:6}}>باقي المبلغ يُسجَّل في إقفال اليوم.</div>
+          <div style={{fontSize:10,color:'var(--t3)',marginTop:6}}>النقدي يُحسب مستلماً الآن. الشبكة والتحويل يُراجعان في إقفال اليوم.</div>
         </div>
         {formError && <div style={{ background:'var(--red-l)', border:'1px solid var(--red-m)', color:'var(--red)', borderRadius:8, padding:'.5rem .75rem', fontSize:12, fontWeight:600, marginBottom:'.75rem' }}>{formError}</div>}
         <button className="btn-primary" disabled={submitting} onClick={submit}>{submitting?'جاري الحفظ...':'تسجيل الحجز'}</button>
@@ -3276,7 +3334,7 @@ function FieldsCal({ role, toast, refresh, branch }) {
                 <div style={{ width:22, height:22, borderRadius:6, border:'2px solid '+(closing.ticks[b.id]?'var(--green)':'var(--border2)'), background:closing.ticks[b.id]?'var(--green)':'#fff', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, flexShrink:0 }}>{closing.ticks[b.id]?'✓':''}</div>
                 <div>
                   <div className="list-name">{b.booker_name}</div>
-                  <div className="list-sub">{b.pitch==='small'?'ملعب صغير':'ملعب كبير'} · {b.time}{Number(b.deposit)>0?` · عربون ${fmt(b.deposit)} ⃁`:''}</div>
+                  <div className="list-sub">{b.pitch==='small'?'ملعب صغير':'ملعب كبير'} · {b.time}{Number(b.collected)>0?` · استلم نقداً ${fmt(b.collected)} ⃁`:''}{Number(b.claimed_network)>0?` · شبكة ${fmt(b.claimed_network)} ⃁`:''}{Number(b.claimed_transfer)>0?` · تحويل ${fmt(b.claimed_transfer)} ⃁`:''}</div>
                 </div>
               </div>
               <span className="badge badge-g">{fmt(b.balance)} ⃁</span>
@@ -3286,16 +3344,17 @@ function FieldsCal({ role, toast, refresh, branch }) {
         <div style={{ display:'flex', justifyContent:'space-between', fontSize:14, fontWeight:700, marginBottom:'.75rem' }}>
           <span style={{ color:'var(--t1)' }}>المفروض تحصيله</span><span style={{ color:'var(--green)' }}>{fmt(closeDue)} ⃁</span>
         </div>
+        {(claimNet > 0 || claimTr > 0) && <div className="info-box info-blue" style={{ marginBottom:'.5rem' }}>المسجّل عند الحجز: شبكة {fmt(claimNet)} ⃁ · تحويل {fmt(claimTr)} ⃁. صحّح الأرقام إن اختلفت.</div>}
         <div style={{ fontSize:12, fontWeight:600, color:'var(--t1)', marginBottom:6 }}>المبلغ المحصّل</div>
         <div style={{ display:'flex', gap:6, marginBottom:8 }}>
           {[['نقدي كاملاً','cash'],['شبكة كاملاً','network'],['تحويل كاملاً','transfer']].map(([l,k]) => (
-            <button key={k} onClick={() => setClosing(c => ({ ...c, cash:'', network:'', transfer:'', [k]: String(closeDue) }))} style={{ flex:1, fontSize:11, background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'5px 0', color:'var(--t2)', cursor:'pointer', fontFamily:'inherit' }}>{l}</button>
+            <button key={k} onClick={() => setClosing(c => ({ ...c, auto:false, cash:'', network:'', transfer:'', [k]: String(closeDue) }))} style={{ flex:1, fontSize:11, background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'5px 0', color:'var(--t2)', cursor:'pointer', fontFamily:'inherit' }}>{l}</button>
           ))}
         </div>
         <div className="form-row" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-          <div className="form-group"><label className="form-label">💵 نقدي</label><input className="form-input" type="number" min="0" value={closing?.cash||''} placeholder="0" onChange={e => setClosing(c => ({ ...c, cash:e.target.value }))}/></div>
-          <div className="form-group"><label className="form-label">💳 شبكة</label><input className="form-input" type="number" min="0" value={closing?.network||''} placeholder="0" onChange={e => setClosing(c => ({ ...c, network:e.target.value }))}/></div>
-          <div className="form-group"><label className="form-label">📱 تحويل</label><input className="form-input" type="number" min="0" value={closing?.transfer||''} placeholder="0" onChange={e => setClosing(c => ({ ...c, transfer:e.target.value }))}/></div>
+          <div className="form-group"><label className="form-label">💵 نقدي</label><input className="form-input" type="number" min="0" value={closeCash||''} placeholder="0" onChange={e => typeAmount('cash', e.target.value)}/></div>
+          <div className="form-group"><label className="form-label">💳 شبكة</label><input className="form-input" type="number" min="0" value={closeNet||''} placeholder="0" onChange={e => typeAmount('network', e.target.value)}/></div>
+          <div className="form-group"><label className="form-label">📱 تحويل</label><input className="form-input" type="number" min="0" value={closeTr||''} placeholder="0" onChange={e => typeAmount('transfer', e.target.value)}/></div>
         </div>
         <div style={{ display:'flex', justifyContent:'space-between', fontSize:13, fontWeight:700, marginBottom:'.75rem', padding:'.5rem .75rem', borderRadius:8,
           background: closeEntered === 0 ? 'var(--surface2)' : closeDiff === 0 ? 'var(--green-l)' : closeDiff < 0 ? 'var(--red-l)' : 'var(--orange-l)',
