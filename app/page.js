@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
-import { supabase, todayStr, shiftDay, applyClosing, AGE_GROUPS, approveRecord, returnRecord, cancelRecord, correctSubscription, subscriptionFlags, subscriptionFlagItems, markFlagsReviewed, FLAG_LABELS, FLAG_ORDER, addDaysStr, PINS, ROLES, BRANCHES, MONTHS, EXP_CATS, EXP_COLORS, monthEnd, fmt, uploadReceipt, subStatus, daysBetween, PKG3_PRICE, bumpPaid, splitPayment, insertInitialPayments, fetchRevenue } from '../lib/supabase'
+import { supabase, todayStr, shiftDay, applyClosing, AGE_GROUPS, approveRecord, returnRecord, cancelRecord, correctSubscription, subscriptionFlags, subscriptionFlagItems, markFlagsReviewed, markFlagsStaffReviewed, findOverlap, FLAG_LABELS, FLAG_ORDER, addDaysStr, PINS, ROLES, BRANCHES, MONTHS, EXP_CATS, EXP_COLORS, monthEnd, fmt, uploadReceipt, subStatus, daysBetween, PKG3_PRICE, bumpPaid, splitPayment, insertInitialPayments, fetchRevenue } from '../lib/supabase'
 
 const TODAY = todayStr()
 const avColors = ['list-av-red','list-av-green','list-av-blue','list-av-yellow']
@@ -1027,6 +1027,7 @@ function OwnerDashboard({ toast, refresh, branch }) {
                     <div>
                       <div className="list-name">{sRow.name}</div>
                       <div className="list-sub" style={{ color:'var(--orange)' }}>{item.text}</div>
+                      {item.staffChecked && <div className="list-sub" style={{ color:'var(--green)', fontWeight:600 }}>✓ راجعته الإدارة{sRow.flags_staff_reviewed_at ? ` · ${fmtDay(sRow.flags_staff_reviewed_at)}` : ''}</div>}
                     </div>
                   </div>
                   <div className="list-right">
@@ -1283,7 +1284,7 @@ function OwnerAcademy({ toast, refresh, branch }) {
             {loading ? <div className="loading">جاري التحميل...</div> : filtered.length===0 ? <div className="empty"><div className="empty-icon">👥</div>لا يوجد مشتركون</div> :
               filtered.map((s,i) => {
                 const st = subStatus(s.end_date)
-                const flags = subscriptionFlags(s, subs)
+                const flags = subscriptionFlagItems(s, subs)
                 return (
                   <div key={s.id} className="list-row" style={{ alignItems:'flex-start' }}>
                     <div className="list-left" style={{ cursor:'pointer' }} onClick={() => setDetailSub(s)}>
@@ -1291,7 +1292,7 @@ function OwnerAcademy({ toast, refresh, branch }) {
                       <div style={{ minWidth:0 }}>
                         <div className="list-name">{s.name}</div>
                         <div className="list-sub">{s.sub_amount>0?`${fmt(s.sub_amount)} ⃁`:''}{s.type==='family'?` · عائلة ${s.members_count||''} أفراد`:''}{s.has_bus?' · باص':''}{s.has_kit?' · طقم':''}{s.end_date?` · حتى ${s.end_date}`:''}{s.guardian_phone?` · ${s.guardian_phone}`:''}</div>
-                        {flags.map(t => <div key={t} className="list-sub" style={{ color:'var(--orange)' }}>⚠️ {t}</div>)}
+                        {flags.map(x => <div key={x.code} className="list-sub" style={{ color:'var(--orange)' }}>⚠️ {x.text}{x.staffChecked ? <span style={{ color:'var(--green)', fontWeight:600 }}> · ✓ راجعته الإدارة</span> : null}</div>)}
                       </div>
                     </div>
                     <div className="list-right">
@@ -1913,6 +1914,13 @@ function StaffSubs({ toast, refresh, branch }) {
   const approvedSubs = subs.filter(s => s.status==='approved')
   const pendingSubs = subs.filter(s => s.status==='pending')
   const returnedSubs = subs.filter(s => s.status==='returned' && s.created_by===createdBy)
+  // the same things the owner sees flagged, so the staff know exactly what to check
+  const flagsOf = s => subscriptionFlagItems(s, approvedSubs, 'staff')
+  async function reviewRow(s) {
+    await markFlagsStaffReviewed(s, flagsOf(s), createdBy)
+    toast('✅ تمت المراجعة، وسيرى المالك أنك راجعتها', 'success'); load()
+  }
+  const flaggedSubs = approvedSubs.filter(s => flagsOf(s).length > 0)
 
   // ---------- academy break: last operating day and first day back ----------
   const closedDays = breakForm.lastDay && breakForm.resumeDay
@@ -2013,11 +2021,21 @@ function StaffSubs({ toast, refresh, branch }) {
   function openAdd() { setFormError(''); setResendRec(null); setForm(emptyForm()); setModal(true) }
   function closeAdd() { setModal(false); setResendRec(null) }
 
+  // asks the database at the moment of saving, so a fresh entry by someone else is never missed
+  async function overlapFor(name, start, end, ignoreIds = []) {
+    const { data } = await supabase.from('subscribers').select('id,name,start_date,end_date,status,is_current')
+      .eq('branch', branch).eq('name', (name || '').trim()).in('status', ['approved', 'pending'])
+    return findOverlap(data || [], name, start, end, ignoreIds)
+  }
+
   async function submit() {
     setFormError('')
     if (form.type !== 'family' && !form.name.trim()) { setFormError('أدخل الاسم'); return }
     if (!form.startDate || !form.endDate) { setFormError('أدخل تاريخ البداية والانتهاء'); return }
     const v = validatePayment(form); if (!v) return
+    // the same person cannot have two subscriptions running on the same day
+    const clash = await overlapFor(subName(form), form.startDate, form.endDate, [resendRec?.id])
+    if (clash) { setFormError(`لدى ${subName(form)} اشتراك يعمل حتى ${clash.end_date}. لا يمكن تسجيل اشتراك يتداخل معه، استخدم التجديد أو ابدأ بعد هذا التاريخ.`); return }
     setSubmitting(true)
     const { error } = await savePeriod(form, v, { name: subName(form), guardian_phone: form.phone || null })
     setSubmitting(false)
@@ -2037,6 +2055,9 @@ function StaffSubs({ toast, refresh, branch }) {
     if (form.type !== 'family' && !form.name.trim()) { setFormError('أدخل الاسم'); return }
     if (!form.startDate || !form.endDate) { setFormError('أدخل تاريخ البداية والانتهاء'); return }
     const v = validatePayment(form); if (!v) return
+    // the same person cannot have two subscriptions running on the same day
+    const clash = await overlapFor(subName(form), form.startDate, form.endDate, [resendRec?.id])
+    if (clash) { setFormError(`لدى ${subName(form)} اشتراك يعمل حتى ${clash.end_date}. لا يمكن تسجيل اشتراك يتداخل معه، استخدم التجديد أو ابدأ بعد هذا التاريخ.`); return }
     setSubmitting(true)
     const { error } = await supabase.from('subscribers').update(
       subRow(form, v, { name: subName(form), guardian_phone: form.phone || null, return_reason: null, returned_at: null })
@@ -2079,6 +2100,8 @@ function StaffSubs({ toast, refresh, branch }) {
     if (!renewSub) return
     if (!renewForm.startDate || !renewForm.endDate) { setFormError('أدخل التواريخ'); return }
     const v = validatePayment(renewForm); if (!v) return
+    const clash = await overlapFor(renewSub.name, renewForm.startDate, renewForm.endDate)
+    if (clash) { setFormError(`الاشتراك الحالي ينتهي في ${clash.end_date}. يجب أن يبدأ التجديد في هذا التاريخ أو بعده.`); return }
     setSubmitting(true)
     const { error } = await savePeriod(renewForm, v, {
       name: renewSub.name, guardian_phone: renewSub.guardian_phone || null,
@@ -2118,6 +2141,7 @@ function StaffSubs({ toast, refresh, branch }) {
   if (filter==='expiring') filtered = filtered.filter(s => expiringSoon.find(e=>e.id===s.id))
   if (filter==='expired') filtered = filtered.filter(s => expired.find(e=>e.id===s.id))
   if (filter==='bus') filtered = filtered.filter(s => s.has_bus)
+  if (filter==='flagged') filtered = filtered.filter(s => flagsOf(s).length > 0)
   if (filter==='kit') filtered = filtered.filter(s => s.has_kit)
 
   const owedTotal = approvedSubs.reduce((a,s) => a+Number(s.balance||0), 0)
@@ -2254,6 +2278,11 @@ function StaffSubs({ toast, refresh, branch }) {
                 {s.type==='family' && Array.isArray(s.players) && s.players.length>0 && (
                   <div style={{ fontSize:11, color:'var(--t2)', marginTop:6 }}>{s.players.map(p => `${p.name}${p.ages?.length?` (${p.ages.join('، ')})`:''}`).join(' · ')}</div>
                 )}
+                {flagsOf(s).length > 0 && (
+                  <div style={{ marginTop:8, background:'var(--orange-l)', border:'1px solid #fbbf24', borderRadius:8, padding:'.4rem .6rem' }}>
+                    {flagsOf(s).map(x => <div key={x.code} style={{ fontSize:11, color:'var(--orange)', fontWeight:600 }}>⚠️ {x.text}</div>)}
+                  </div>
+                )}
                 <PayBreakdown hasMoney total={Number(s.total_amount||0)} paid={paid} pays={pays} />
                 <div style={{ marginTop:'.8rem', paddingTop:'.7rem', borderTop:'1px solid var(--border)' }}>
                   <button onClick={() => deleteSub(s)} style={{ ...btn('var(--red-l)','var(--red-m)','var(--red)'), fontSize:11, padding:'4px 12px' }}>حذف</button>
@@ -2265,7 +2294,7 @@ function StaffSubs({ toast, refresh, branch }) {
       )}
 
       <div style={{ display:'flex', gap:'.4rem', overflowX:'auto', marginBottom:'.75rem', scrollbarWidth:'none' }}>
-        {[['all','الكل'],['unpaid','عليه مبلغ'],['expiring','ينتهي قريباً'],['expired','منتهي'],['bus','الباص'],['kit','اشترى طقم']].map(([v,l]) => (
+        {[['all','الكل'],['flagged',`يحتاج مراجعة${flaggedSubs.length ? ` (${flaggedSubs.length})` : ''}`],['unpaid','عليه مبلغ'],['expiring','ينتهي قريباً'],['expired','منتهي'],['bus','الباص'],['kit','اشترى طقم']].map(([v,l]) => (
           <button key={v} onClick={() => setFilter(v)} style={{ flexShrink:0, padding:'5px 12px', borderRadius:20, border:'1.5px solid', borderColor:filter===v?'var(--red)':'var(--border)', background:filter===v?'var(--red-l)':'var(--surface)', color:filter===v?'var(--red)':'var(--t2)', fontSize:12, cursor:'pointer', fontFamily:'inherit', fontWeight:filter===v?600:400 }}>{l}</button>
         ))}
       </div>
@@ -2284,6 +2313,8 @@ function StaffSubs({ toast, refresh, branch }) {
                     <div className="list-name">{s.name}</div>
                     <div className="list-sub">{s.sub_amount>0?`${fmt(s.sub_amount)} ⃁`:''}{s.type==='family'?` · عائلة ${s.members_count||''} أفراد`:''}{s.has_bus?' · باص':''}{s.has_kit?' · طقم':''}{s.guardian_phone?` · 📞 ${s.guardian_phone}`:''}</div>
                     <div className="list-sub">{s.end_date?`حتى ${s.end_date}`:''}</div>
+                    {flagsOf(s).map(x => <div key={x.code} className="list-sub" style={{ color:'var(--orange)', fontWeight:600 }}>⚠️ {x.text}</div>)}
+                    {flagsOf(s).length > 0 && <button onClick={() => reviewRow(s)} style={{ fontSize:10, background:'var(--green-l)', border:'1px solid var(--green)', borderRadius:6, padding:'3px 10px', color:'var(--green)', cursor:'pointer', fontFamily:'inherit', marginTop:4 }}>تمت المراجعة</button>}
                   </div>
                 </div>
                 <div className="list-right">
@@ -2654,6 +2685,9 @@ function StaffInventory({ toast, refresh, branch }) {
   const seenName = {}
   const gridItems = inventory.map(r => { if (seenName[r.name]) return { ...r, sold: 0 }; seenName[r.name] = true; return { ...r, sold: soldMap[r.name] || 0 } })
   const monthUnits = groupInventory(gridItems).reduce((a, g) => a + Number(g.sold || 0), 0)
+  // what left the stock without a store sale: kits given with subscriptions and water boxes taken with bookings
+  const kitLines = Object.entries(monthKits.reduce((m, k) => { m[k.kit_item] = (m[k.kit_item] || 0) + Number(k.kit_qty || 1); return m }, {})).map(([name, qty]) => ({ name, qty }))
+  const hasOutside = kitLines.length > 0 || monthWater > 0
 
   function openSale(g) {
     setResendSale(null); setGroup(g); setSize(''); setChosenSub(null); setSubSearch(''); setForm(blankSale); setModal(true)
@@ -2754,9 +2788,25 @@ function StaffInventory({ toast, refresh, branch }) {
 
       <InventoryGrid items={gridItems} onSale={openSale} showSold />
 
-      <div className="sec">سجل المبيعات · {MONTHS.find(m => m.value === month)?.label}</div>
+      <div className="sec">حركة المخزون · {MONTHS.find(m => m.value === month)?.label}</div>
       <div className="card">
-        {visibleSales.length===0 ? <div className="empty"><div className="empty-icon">🛍️</div>لا يوجد مبيعات في هذا الشهر</div> :
+        {kitLines.map(k => (
+          <div key={k.name} className="list-row">
+            <div className="list-left">
+              <div className="list-av list-av-blue">👕</div>
+              <div><div className="list-name">{k.name} × {k.qty}</div><div className="list-sub">مع الاشتراكات</div></div>
+            </div>
+          </div>
+        ))}
+        {monthWater > 0 && (
+          <div className="list-row">
+            <div className="list-left">
+              <div className="list-av list-av-blue">💧</div>
+              <div><div className="list-name">مياه × {monthWater}</div><div className="list-sub">مع حجوزات الملاعب</div></div>
+            </div>
+          </div>
+        )}
+        {visibleSales.length===0 && !hasOutside ? <div className="empty"><div className="empty-icon">🛍️</div>لا توجد حركة في هذا الشهر</div> :
           visibleSales.map(s => (
             <div key={s.id} className="list-row">
               <div className="list-left">
